@@ -1,1 +1,1 @@
-"""Tests for API clients."""
+"""Tests for pypi_audit.api_clients module."""

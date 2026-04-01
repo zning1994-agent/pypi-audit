@@ -1,309 +1,268 @@
-"""Tests for requirements.txt parser."""
+"""Unit tests for requirements.txt parser."""
 
 import pytest
 from pathlib import Path
+from unittest.mock import mock_open, patch
 
 from pypi_audit.parsers.requirements import RequirementsParser
-from pypi_audit.parsers.base import Dependency, ParseResult
+from pypi_audit.parsers.base import Dependency
 
 
 class TestRequirementsParser:
     """Test cases for RequirementsParser."""
-
+    
     @pytest.fixture
     def parser(self) -> RequirementsParser:
         """Create a parser instance."""
         return RequirementsParser()
-
+    
     def test_supported_extensions(self, parser: RequirementsParser) -> None:
-        """Test that parser reports correct supported extensions."""
+        """Test that parser supports .txt extension."""
         assert parser.supported_extensions == (".txt",)
-
-    def test_parse_basic_requirements(
-        self,
-        parser: RequirementsParser,
-        sample_requirements_content: str,
-    ) -> None:
-        """Test parsing basic requirements.txt format."""
-        result = parser.parse("requirements.txt", sample_requirements_content)
-
-        assert result.file_path == "requirements.txt"
-        assert result.raw_content == sample_requirements_content
-        assert not result.has_errors
-        assert not result.is_empty
-
-        # Check that dependencies were extracted
-        names = [dep.name for dep in result.dependencies]
-        assert "requests" in names
-        assert "click" in names
-        assert "rich" in names
-        assert "httpx" in names
-        assert "packaging" in names
-
-    def test_parse_with_version_operator(self, parser: RequirementsParser) -> None:
-        """Test parsing packages with various version operators."""
-        content = """
-requests==2.28.0
-click>=8.0.0
-flask~=4.0
-aiohttp<0.24.0
-urllib3>=1.0,!=1.1
+    
+    def test_parse_simple_package(self, parser: RequirementsParser) -> None:
+        """Test parsing a simple package without version."""
+        content = "requests\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].version is None
+    
+    def test_parse_package_with_version(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with version specifier."""
+        content = "requests==2.28.0\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].version == "==2.28.0"
+    
+    def test_parse_package_with_greater_than_version(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with >= version specifier."""
+        content = "requests>=2.28.0\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].version == ">=2.28.0"
+    
+    def test_parse_package_with_extras(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with extras."""
+        content = "requests[security]\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].extras == ["security"]
+    
+    def test_parse_package_with_multiple_extras(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with multiple extras."""
+        content = "requests[security,socks]\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].extras == ["security", "socks"]
+    
+    def test_parse_package_with_version_and_extras(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with both version and extras."""
+        content = "requests[security]==2.28.0\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].version == "==2.28.0"
+        assert deps[0].extras == ["security"]
+    
+    def test_parse_package_with_marker(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with environment marker."""
+        content = "requests ; python_version >= '3.8'\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+        assert deps[0].marker == "python_version >= '3.8'"
+    
+    def test_parse_package_with_marker_and_version(self, parser: RequirementsParser) -> None:
+        """Test parsing a package with marker and version."""
+        content = "PyJWT[crypto]>=2.0.0 ; python_version >= '3.8'\n"
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "PyJWT"
+        assert deps[0].version == ">=2.0.0"
+        assert deps[0].extras == ["crypto"]
+        assert deps[0].marker == "python_version >= '3.8'"
+    
+    def test_parse_multiple_packages(self, parser: RequirementsParser) -> None:
+        """Test parsing multiple packages."""
+        content = """requests==2.28.0
+flask>=2.0.0
+django
 """
-        result = parser.parse("requirements.txt", content)
-
-        deps = {dep.name: dep for dep in result.dependencies}
-        assert deps["requests"].version == "==2.28.0"
-        assert deps["click"].version == ">=8.0.0"
-        assert deps["flask"].version == "~=4.0"
-        assert deps["aiohttp"].version == "<0.24.0"
-        assert deps["urllib3"].version == ">=1.0,!=1.1"
-
-    def test_parse_extras(self, parser: RequirementsParser) -> None:
-        """Test parsing packages with extras."""
-        content = """
-requests[security]>=2.0
-click[extra1,extra2]>=8.0
-flask[async]>=2.0
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 3
+        assert deps[0].name == "requests"
+        assert deps[0].version == "==2.28.0"
+        assert deps[1].name == "flask"
+        assert deps[1].version == ">=2.0.0"
+        assert deps[2].name == "django"
+        assert deps[2].version is None
+    
+    def test_parse_with_comments(self, parser: RequirementsParser) -> None:
+        """Test parsing with inline and full-line comments."""
+        content = """# This is a comment
+requests==2.28.0  # inline comment
+# Another comment
+flask>=2.0.0
 """
-        result = parser.parse("requirements.txt", content)
-
-        deps = {dep.name: dep for dep in result.dependencies}
-        assert deps["requests"].extras == ["security"]
-        assert deps["click"].extras == ["extra1", "extra2"]
-        assert deps["flask"].extras == ["async"]
-
-    def test_parse_environment_markers(self, parser: RequirementsParser) -> None:
-        """Test parsing packages with environment markers."""
-        content = """
-pytest; python_version >= "3.8"
-typing-extensions; python_version < "3.8"
-win32api; sys_platform == "win32"
-"""
-        result = parser.parse("requirements.txt", content)
-
-        deps = {dep.name: dep for dep in result.dependencies}
-        assert deps["pytest"].markers == 'python_version >= "3.8"'
-        assert deps["typing-extensions"].markers == 'python_version < "3.8"'
-        assert deps["win32api"].markers == 'sys_platform == "win32"'
-
-    def test_skip_comments(self, parser: RequirementsParser) -> None:
-        """Test that comment lines are skipped."""
-        content = """
-# This is a comment
-requests==2.28.0
-  # Indented comment
-click>=8.0.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        names = [dep.name for dep in result.dependencies]
-        assert len(names) == 2
-        assert "requests" in names
-        assert "click" in names
-
-    def test_skip_options(self, parser: RequirementsParser) -> None:
-        """Test that pip options are skipped."""
-        content = """
---index-url https://pypi.org/simple
--r base.txt
---extra-index-url https://custom.pypi.com
--e .
---editable .
---find-links https://links.com
-requests==2.28.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        names = [dep.name for dep in result.dependencies]
-        assert len(names) == 1
-        assert "requests" in names
-
-    def test_skip_empty_lines(self, parser: RequirementsParser) -> None:
-        """Test that empty lines are skipped."""
-        content = """
-
-requests==2.28.0
-
-click>=8.0.0
-
-"""
-        result = parser.parse("requirements.txt", content)
-
-        assert len(result.dependencies) == 2
-
-    def test_package_name_normalization(self, parser: RequirementsParser) -> None:
-        """Test that package names are normalized to lowercase."""
-        content = """
-Requests==2.28.0
-Click>=8.0.0
-PACKAGING>=21.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        names = [dep.name for dep in result.dependencies]
-        assert "requests" in names
-        assert "click" in names
-        assert "packaging" in names
-        assert "Requests" not in names
-        assert "Click" not in names
-        assert "PACKAGING" not in names
-
-    def test_no_duplicates(self, parser: RequirementsParser) -> None:
-        """Test that duplicate packages are not included."""
-        content = """
-requests==2.28.0
-Requests>=2.0
-REQUESTS<3.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        requests_deps = [d for d in result.dependencies if d.name == "requests"]
-        assert len(requests_deps) == 1
-
-    def test_git_dependency(self, parser: RequirementsParser) -> None:
-        """Test parsing git+https:// dependencies."""
-        content = """
-git+https://github.com/psf/requests.git@v2.28.0
-git+ssh://git@github.com/user/repo.git@branch
-"""
-        result = parser.parse("requirements.txt", content)
-
-        assert len(result.dependencies) == 2
-        names = [dep.name for dep in result.dependencies]
-        assert "requests" in names
-        assert "repo" in names
-
-    def test_editable_git_dependency(self, parser: RequirementsParser) -> None:
-        """Test that editable git installs are skipped."""
-        content = """
--e git+https://github.com/user/repo.git#egg=my_package
---editable git+https://github.com/user/repo2.git#egg=my_package2
-requests==2.28.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        names = [dep.name for dep in result.dependencies]
-        assert "requests" in names
-        assert len(names) == 1  # Only requests, not the git deps
-
-    def test_url_dependency(self, parser: RequirementsParser) -> None:
-        """Test parsing URL-based dependencies."""
-        content = """
-urllib3 @ https://github.com/urllib3/urllib3/archive/refs/tags/1.26.0.tar.gz
-pypi-audit@https://example.com/pypi-audit.tar.gz
-requests==2.28.0
-"""
-        result = parser.parse("requirements.txt", content)
-
-        names = [dep.name for dep in result.dependencies]
-        assert "urllib3" in names
-        assert "pypi-audit" in names
-        assert "requests" in names
-
-    def test_parse_from_file(
-        self,
-        parser: RequirementsParser,
-        sample_requirements_file: Path,
-    ) -> None:
-        """Test parsing from actual file."""
-        result = parser.parse(str(sample_requirements_file))
-
-        assert not result.has_errors
-        assert len(result.dependencies) > 0
-        assert all(dep.source_file == str(sample_requirements_file) for dep in result.dependencies)
-
-    def test_parse_nonexistent_file(self, parser: RequirementsParser) -> None:
-        """Test parsing a file that doesn't exist."""
-        result = parser.parse("/nonexistent/requirements.txt")
-
-        assert result.has_errors
-        assert "File not found" in result.errors[0]
-
-    def test_parse_iter(self, parser: RequirementsParser) -> None:
-        """Test iterating over dependencies."""
-        content = """
-requests==2.28.0
-click>=8.0.0
-"""
-        deps = list(parser.parse_iter("requirements.txt", content))
-
+        deps = list(parser.parse_string(content))
+        
         assert len(deps) == 2
-        assert all(isinstance(dep, Dependency) for dep in deps)
+        assert deps[0].name == "requests"
+        assert deps[1].name == "flask"
+    
+    def test_parse_empty_lines(self, parser: RequirementsParser) -> None:
+        """Test parsing with empty lines."""
+        content = """requests==2.28.0
 
-    def test_complex_requirements(
-        self,
-        parser: RequirementsParser,
-        complex_requirements_content: str,
-    ) -> None:
-        """Test parsing complex requirements with various formats."""
-        result = parser.parse("requirements.txt", complex_requirements_content)
+flask>=2.0.0
 
-        assert not result.has_errors
-        names = [dep.name for dep in result.dependencies]
-        assert len(names) > 0
-
-        # Verify some expected packages
-        expected = [
-            "requests",
-            "click",
-            "flask",
-            "sqlalchemy",
-            "django",
-            "aiohttp",
-            "celery",
-            "pydantic",
-            "uvicorn",
-            "httpx",
-            "python-dotenv",
-        ]
-        for name in expected:
-            assert name in names, f"Expected {name} in dependencies"
-
-
-class TestDependencyModel:
-    """Test cases for Dependency model."""
-
-    def test_dependency_str_with_version(self) -> None:
-        """Test string representation with version."""
-        dep = Dependency(name="requests", version="==2.28.0")
-        assert str(dep) == "requests==2.28.0"
-
-    def test_dependency_str_without_version(self) -> None:
-        """Test string representation without version."""
-        dep = Dependency(name="requests")
-        assert str(dep) == "requests"
-
-    def test_dependency_defaults(self) -> None:
-        """Test default values for Dependency."""
-        dep = Dependency(name="requests")
-        assert dep.version is None
-        assert dep.extras == []
-        assert dep.markers is None
-        assert dep.source_file is None
-
-
-class TestParseResultModel:
-    """Test cases for ParseResult model."""
-
-    def test_parse_result_has_errors(self) -> None:
-        """Test has_errors property."""
-        result = ParseResult(file_path="test.txt", errors=["Error 1"])
-        assert result.has_errors
-
-    def test_parse_result_no_errors(self) -> None:
-        """Test has_errors property when no errors."""
-        result = ParseResult(file_path="test.txt")
-        assert not result.has_errors
-
-    def test_parse_result_is_empty(self) -> None:
-        """Test is_empty property."""
-        result = ParseResult(file_path="test.txt")
-        assert result.is_empty
-
-    def test_parse_result_not_empty(self) -> None:
-        """Test is_empty property when dependencies exist."""
-        result = ParseResult(
-            file_path="test.txt",
-            dependencies=[Dependency(name="requests")],
-        )
-        assert not result.is_empty
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 2
+    
+    def test_parse_skip_requirement_directives(self, parser: RequirementsParser) -> None:
+        """Test that -r and --requirement directives are skipped."""
+        content = """-r other_requirements.txt
+--requirement=base.txt
+requests==2.28.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+    
+    def test_parse_skip_editable_installs(self, parser: RequirementsParser) -> None:
+        """Test that -e and --editable directives are skipped."""
+        content = """-e git+https://github.com/user/repo.git
+--editable=.
+requests==2.28.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+    
+    def test_parse_skip_options(self, parser: RequirementsParser) -> None:
+        """Test that pip options are skipped."""
+        content = """--index-url https://pypi.org/simple
+--extra-index-url https://custom.pypi.org/simple
+-f https://files.pythonhosted.org
+requests==2.28.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 1
+        assert deps[0].name == "requests"
+    
+    def test_parse_package_name_normalization(self, parser: RequirementsParser) -> None:
+        """Test that package names are normalized."""
+        content = """Requests
+Django_Core
+Some_Package==1.0.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].name == "requests"
+        assert deps[1].name == "django-core"
+        assert deps[2].name == "some-package"
+    
+    def test_parse_version_v_prefix_normalized(self, parser: RequirementsParser) -> None:
+        """Test that version 'v' prefix is normalized."""
+        content = """requests==v2.28.0
+flask>=v1.0.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].version == "==2.28.0"
+        assert deps[1].version == ">=1.0.0"
+    
+    def test_parse_complex_version_specs(self, parser: RequirementsParser) -> None:
+        """Test various version specifiers."""
+        content = """requests~=2.28.0
+flask>=2.0.0,<3.0.0
+django!=1.0.0
+celery[redis]>=5.0.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].version == "~=2.28.0"
+        assert deps[1].version == ">=2.0.0,<3.0.0"
+        assert deps[2].version == "!=1.0.0"
+        assert deps[3].version == ">=5.0.0"
+        assert deps[3].extras == ["redis"]
+    
+    def test_parse_from_file(self, parser: RequirementsParser, tmp_path: Path) -> None:
+        """Test parsing from an actual file."""
+        requirements_file = tmp_path / "requirements.txt"
+        requirements_file.write_text("requests==2.28.0\nflask>=2.0.0\n")
+        
+        deps = list(parser.parse(requirements_file))
+        
+        assert len(deps) == 2
+        assert all(dep.source_file == requirements_file for dep in deps)
+    
+    def test_parse_package_with_hyphen_in_name(self, parser: RequirementsParser) -> None:
+        """Test parsing packages with hyphens in names."""
+        content = """boto3
+PyYAML
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].name == "boto3"
+        assert deps[1].name == "pyyaml"
+    
+    def test_parse_package_with_underscore_in_name(self, parser: RequirementsParser) -> None:
+        """Test parsing packages with underscores in names."""
+        content = """my_package
+another_pkg
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].name == "my-package"
+        assert deps[1].name == "another-pkg"
+    
+    def test_parse_empty_content(self, parser: RequirementsParser) -> None:
+        """Test parsing empty content."""
+        content = ""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 0
+    
+    def test_parse_only_comments(self, parser: RequirementsParser) -> None:
+        """Test parsing content with only comments."""
+        content = """# Comment 1
+# Comment 2
+# Comment 3
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert len(deps) == 0
+    
+    def test_parse_package_with_operators(self, parser: RequirementsParser) -> None:
+        """Test parsing with various version operators."""
+        content = """pkg1===1.0.0
+pkg2>=1.0.0,<2.0.0
+pkg3!=1.0.0
+pkg4<=2.0.0
+"""
+        deps = list(parser.parse_string(content))
+        
+        assert deps[0].version == "===1.0.0"
+        assert deps[1].version == ">=1.0.0,<2.0.0"
+        assert deps[2].version == "!=1.0.0"
+        assert deps[3].version == "<=2.0.0"

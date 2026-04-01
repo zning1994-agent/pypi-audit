@@ -1,129 +1,145 @@
 """Parser for pyproject.toml files."""
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..models import Dependency
-from .base import BaseParser
-
-# Try to import tomli for Python < 3.11, fall back to tomllib
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        tomllib = None  # type: ignore
+from .base import BaseParser, Dependency
 
 
 class PyprojectParser(BaseParser):
     """Parser for pyproject.toml dependency files."""
-
+    
     @property
     def supported_extensions(self) -> tuple[str, ...]:
         return (".toml",)
-
-    def can_parse(self, file_path: Path) -> bool:
-        """Check if the file is a pyproject.toml file."""
-        return file_path.name == "pyproject.toml"
-
+    
     def parse(self, file_path: Path) -> Iterator[Dependency]:
-        """
-        Parse a pyproject.toml file for dependencies.
-
-        Args:
-            file_path: Path to pyproject.toml
-
-        Yields:
-            Dependency objects from [project.dependencies] and [project.optional-dependencies]
-        """
-        if not file_path.exists():
-            return
-
-        if tomllib is None:
-            # Cannot parse TOML without tomli on Python < 3.11
-            return
-
+        """Parse a pyproject.toml file."""
+        content = file_path.read_text(encoding="utf-8")
+        for dep in self.parse_string(content):
+            dep.source_file = file_path
+            yield dep
+    
+    def parse_string(self, content: str) -> Iterator[Dependency]:
+        """Parse dependencies from pyproject.toml content."""
+        # Import tomllib/tomli based on Python version
+        if sys.version_info >= (3, 11):
+            import tomllib
+        else:
+            import tomli as tomllib
+        
         try:
-            with open(file_path, "rb") as f:
-                data = tomllib.load(f)
+            data = tomllib.loads(content)
         except Exception:
             return
-
-        # Parse main dependencies
-        dependencies = data.get("project", {}).get("dependencies", [])
-        yield from self._parse_dependency_list(dependencies, file_path)
-
-        # Parse optional dependencies
+        
+        # Parse project dependencies
+        project_deps = data.get("project", {}).get("dependencies", [])
+        yield from self._parse_dependencies_list(project_deps)
+        
+        # Parse project optional dependencies (extras)
         optional_deps = data.get("project", {}).get("optional-dependencies", {})
         for extra_name, deps in optional_deps.items():
-            yield from self._parse_dependency_list(deps, file_path, extra=extra_name)
-
-        # Parse PEP 621 build dependencies
-        build_deps = data.get("project", {}).get("optional-dependencies", {}).get(
-            "test", []
-        )
-        yield from self._parse_dependency_list(build_deps, file_path, extra="build")
-
-        # Also check legacy poetry-style dependencies
+            for dep in self._parse_dependencies_list(deps):
+                if dep.extras is None:
+                    dep.extras = []
+                dep.extras.append(extra_name)
+                yield dep
+        
+        # Parse poetry-style dependencies (tool.poetry.dependencies)
         poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
-        yield from self._parse_poetry_dependencies(poetry_deps, file_path)
-
-    def _parse_dependency_list(
-        self, dependencies: list[str], source_file: Path, extra: str | None = None
-    ) -> Iterator[Dependency]:
-        """Parse a list of dependency strings."""
-        for dep in dependencies:
-            dep_obj = self._parse_dependency_string(dep, source_file, extra)
-            if dep_obj:
-                yield dep_obj
-
-    def _parse_dependency_string(
-        self, dep: str, source_file: Path, extra: str | None = None
-    ) -> Dependency | None:
-        """Parse a single dependency string like 'requests>=2.0'."""
-        import re
-
-        # Match package name and version specifier
-        pattern = re.compile(
-            r'^([a-zA-Z0-9][-a-zA-Z0-9._]*)'  # Package name
-            r'((?:[=<>!~]+|>=?|<=?)(?:[\d.]+(?:[a-zA-Z0-9._-]+)?)?)?'  # Version
-            r'(?:\[.*?\])?'  # Extras (strip them)
-        )
-        match = pattern.match(dep.strip())
-        if match:
-            name = match.group(1)
-            version = match.group(2) or "*"
-            return Dependency(
-                name=name,
-                version=version,
-                source_file=str(source_file),
-                line_number=None,
-            )
+        yield from self._parse_poetry_dependencies(poetry_deps)
+        
+        # Parse poetry optional dependencies
+        poetry_optional = data.get("tool", {}).get("poetry", {}).get("group", {})
+        for group_name, group_data in poetry_optional.items():
+            group_deps = group_data.get("dependencies", {})
+            yield from self._parse_poetry_dependencies(group_deps)
+    
+    def _parse_dependencies_list(self, deps: list[str] | dict[str, Any]) -> Iterator[Dependency]:
+        """Parse a list of dependency specifications."""
+        for dep in deps:
+            if isinstance(dep, str):
+                yield from self._parse_string_dep(dep)
+            elif isinstance(dep, dict):
+                # Handle complex dependency specs like {version = "^1.0", extras = ["aio"]}
+                for name, spec in dep.items():
+                    dep_obj = self._parse_complex_spec(name, spec)
+                    if dep_obj:
+                        yield dep_obj
+    
+    def _parse_string_dep(self, dep_str: str) -> Iterator[Dependency]:
+        """Parse a single dependency string."""
+        dep_str = dep_str.strip()
+        if not dep_str or dep_str.startswith("#"):
+            return
+        
+        # Simple format: package or package==version
+        if "[" in dep_str:
+            # Has extras
+            name, rest = dep_str.split("[", 1)
+            extras_str, rest = rest.split("]", 1)
+            extras = [e.strip() for e in extras_str.split(",")]
+        else:
+            name = dep_str.split("=")[0].split("<")[0].split(">")[0].split("!")[0].split(" ")[0]
+            extras = None
+            rest = ""
+        
+        # Extract version
+        version = None
+        for sep in ["==", ">=", "<=", ">", "<", "!=", "~=", "^=", "==="]:
+            if sep in name:
+                parts = name.split(sep)
+                name = parts[0]
+                version = self._normalize_version(sep + parts[1])
+                break
+        
+        if version is None and rest:
+            for sep in ["==", ">=", "<=", ">", "<", "!=", "~=", "^=", "==="]:
+                if sep in rest:
+                    version = self._normalize_version(rest.split(sep)[1].strip())
+                    break
+        
+        yield Dependency(name=name.strip(), version=version, extras=extras)
+    
+    def _parse_complex_spec(self, name: str, spec: str | dict[str, Any]) -> Dependency | None:
+        """Parse a complex dependency specification (dict format)."""
+        if isinstance(spec, str):
+            return next(self._parse_string_dep(f"{name}{spec}"), None)
+        
+        if isinstance(spec, dict):
+            version = spec.get("version")
+            if version:
+                version = self._normalize_version(version)
+            
+            extras = spec.get("extras")
+            if extras:
+                extras = [extras] if isinstance(extras, str) else list(extras)
+            
+            return Dependency(name=name, version=version, extras=extras)
+        
         return None
-
-    def _parse_poetry_dependencies(
-        self, dependencies: dict[str, Any], source_file: Path
-    ) -> Iterator[Dependency]:
-        """Parse Poetry-style dependencies."""
-        for name, spec in dependencies.items():
-            # Skip Python itself
+    
+    def _parse_poetry_dependencies(self, deps: dict[str, Any]) -> Iterator[Dependency]:
+        """Parse Poetry-style dependency dictionary."""
+        for name, spec in deps.items():
+            # Skip Python version constraints
             if name == "python":
                 continue
-
+            
             if isinstance(spec, str):
-                version = spec
+                version = self._normalize_version(spec) if spec else None
+                yield Dependency(name=name, version=version)
             elif isinstance(spec, dict):
-                version = spec.get("version", "*")
+                version = spec.get("version")
+                if version:
+                    version = self._normalize_version(version)
+                
+                extras = spec.get("extras")
+                if extras:
+                    extras = [extras] if isinstance(extras, str) else list(extras)
+                
+                yield Dependency(name=name, version=version, extras=extras)
             else:
-                version = "*"
-
-            yield Dependency(
-                name=name,
-                version=version,
-                source_file=str(source_file),
-                line_number=None,
-            )
+                yield Dependency(name=name)

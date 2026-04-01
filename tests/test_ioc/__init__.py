@@ -1,1 +1,1 @@
-"""Tests for IOC detection module."""
+"""Tests for pypi_audit.ioc module."""
