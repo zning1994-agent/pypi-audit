@@ -1,10 +1,18 @@
-"""Parsers for Python dependency files."""
+"""
+Parsers for dependency files.
 
-from .base import BaseParser
-from .pipfile import PipfileLockParser, parse_pipfile_lock
+Supports requirements.txt, pyproject.toml, and Pipfile.lock formats.
+"""
+
+from .base import BaseParser, ParseResult
+from .requirements import RequirementsParser
+from .pyproject import PyprojectParser
+from .pipfile import PipfileParser
 
 __all__ = [
     "BaseParser",
-    "PipfileLockParser",
-    "parse_pipfile_lock",
+    "ParseResult", 
+    "RequirementsParser",
+    "PyprojectParser",
+    "PipfileParser",
 ]

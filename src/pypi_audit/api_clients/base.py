@@ -1,36 +1,25 @@
 """
-Data models for pypi-audit.
+Base classes for API clients.
 
-Defines core data structures for packages, vulnerabilities, and audit results.
+Provides common interfaces and data models for vulnerability API clients.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 
 class VulnerabilitySeverity(Enum):
-    """Vulnerability severity levels following CVSS standards."""
+    """Vulnerability severity levels."""
     
     UNKNOWN = "unknown"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
-    
-    @classmethod
-    def from_string(cls, value: str) -> "VulnerabilitySeverity":
-        """Create severity from string value."""
-        mapping = {
-            "unknown": cls.UNKNOWN,
-            "low": cls.LOW,
-            "medium": cls.MEDIUM,
-            "high": cls.HIGH,
-            "critical": cls.CRITICAL,
-        }
-        return mapping.get(value.lower(), cls.UNKNOWN)
 
 
 @dataclass
@@ -45,7 +34,7 @@ class Vulnerability:
         severity: Severity level of the vulnerability.
         advisory: Description or advisory text.
         cve_id: CVE identifier if available.
-        source: API source (e.g., 'osv', 'pypi_safety', 'safety_db').
+        source: API source (e.g., 'osv', 'pypi_safety').
         affected_versions: List of affected version ranges.
         fixed_versions: List of versions with fixes.
         published_date: When the vulnerability was published.
@@ -56,7 +45,7 @@ class Vulnerability:
     id: str
     package: str
     version: str
-    severity: VulnerabilitySeverity = VulnerabilitySeverity.UNKNOWN
+    severity: VulnerabilitySeverity | None = None
     advisory: str | None = None
     cve_id: str | None = None
     source: str = "unknown"
@@ -67,10 +56,17 @@ class Vulnerability:
     references: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     
+    def __post_init__(self) -> None:
+        """Post-initialization processing."""
+        if self.severity is None:
+            self.severity = VulnerabilitySeverity.UNKNOWN
+    
     @property
     def severity_value(self) -> str:
         """Get severity as string value."""
-        return self.severity.value
+        if self.severity:
+            return self.severity.value
+        return "unknown"
     
     @property
     def is_critical(self) -> bool:
@@ -97,56 +93,66 @@ class Vulnerability:
             "published_date": self.published_date,
             "modified_date": self.modified_date,
             "references": self.references,
+            "metadata": self.metadata,
         }
 
 
-@dataclass
-class Package:
+class APIClient(ABC):
     """
-    Represents a Python package with its dependencies.
+    Abstract base class for vulnerability API clients.
     
-    Attributes:
-        name: Package name.
-        version: Package version.
-        file_path: Path to the dependency file.
-        file_type: Type of dependency file (requirements, pyproject, pipfile).
+    All API clients should inherit from this class and implement
+    the required methods.
     """
     
-    name: str
-    version: str
-    file_path: str | None = None
-    file_type: str | None = None
+    @abstractmethod
+    def check_package(self, package_name: str, version: str) -> list[Vulnerability]:
+        """
+        Check a package version for vulnerabilities.
+        
+        Args:
+            package_name: Name of the package.
+            version: Version to check.
+            
+        Returns:
+            List of vulnerabilities found.
+        """
+        pass
     
-    def __str__(self) -> str:
-        """String representation as package==version."""
-        return f"{self.name}=={self.version}"
+    @abstractmethod
+    def close(self) -> None:
+        """Close the client and release resources."""
+        pass
     
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "name": self.name,
-            "version": self.version,
-            "file_path": self.file_path,
-            "file_type": self.file_type,
-        }
+    def __enter__(self) -> "APIClient":
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Context manager exit."""
+        self.close()
 
 
 @dataclass
-class AuditResult:
+class VulnerabilityReport:
     """
-    Result of auditing a package or project.
+    Aggregated vulnerability report from multiple sources.
     
     Attributes:
-        package: Package that was audited.
+        package: Package name.
+        version: Package version checked.
         vulnerabilities: List of vulnerabilities found.
-        scan_time: Time taken for the scan in seconds.
-        sources_queried: List of API sources that were queried.
+        sources: List of sources queried.
+        scan_time: Time taken for the scan.
+        timestamp: When the scan was performed.
     """
     
-    package: Package | None = None
+    package: str
+    version: str
     vulnerabilities: list[Vulnerability] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
     scan_time: float = 0.0
-    sources_queried: list[str] = field(default_factory=list)
+    timestamp: str | None = None
     
     @property
     def has_vulnerabilities(self) -> bool:
@@ -166,20 +172,27 @@ class AuditResult:
             if v.severity == VulnerabilitySeverity.HIGH
         )
     
-    @property
-    def total_count(self) -> int:
-        """Total number of vulnerabilities."""
-        return len(self.vulnerabilities)
+    def get_by_severity(
+        self, 
+        severity: VulnerabilitySeverity
+    ) -> list[Vulnerability]:
+        """Get vulnerabilities by severity level."""
+        return [
+            v for v in self.vulnerabilities 
+            if v.severity == severity
+        ]
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "package": self.package.to_dict() if self.package else None,
+            "package": self.package,
+            "version": self.version,
             "vulnerabilities": [v.to_dict() for v in self.vulnerabilities],
+            "sources": self.sources,
             "scan_time": self.scan_time,
-            "sources_queried": self.sources_queried,
+            "timestamp": self.timestamp,
             "summary": {
-                "total": self.total_count,
+                "total": len(self.vulnerabilities),
                 "critical": self.critical_count,
                 "high": self.high_count,
             },

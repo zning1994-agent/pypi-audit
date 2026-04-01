@@ -1,37 +1,47 @@
-"""Pytest configuration and fixtures."""
+"""
+Pytest configuration and shared fixtures.
+"""
+
+from __future__ import annotations
 
 import pytest
 
 
-@pytest.fixture
-def sample_requirements() -> str:
-    """Return sample requirements.txt content."""
-    return "requests==2.31.0\nflask==3.0.0\n"
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers", "integration: marks tests as integration tests (may require network)"
+    )
+    config.addinivalue_line(
+        "markers", "unit: marks tests as unit tests (no network required)"
+    )
 
 
 @pytest.fixture
-def sample_pyproject() -> dict:
-    """Return sample pyproject.toml data."""
+def sample_package_info() -> dict:
+    """Sample package info for testing."""
     return {
-        "project": {
-            "dependencies": ["requests==2.31.0", "flask>=3.0.0"],
-        }
+        "name": "test-package",
+        "version": "1.0.0",
+        "summary": "A test package",
+        "author": "Test Author",
+        "author_email": "test@example.com",
+        "license": "MIT",
+        "home_page": "https://example.com",
+        "classifiers": [],
+        "requires_python": ">=3.8",
     }
 
 
 @pytest.fixture
-def sample_pipfile_lock() -> dict:
-    """Return sample Pipfile.lock data."""
+def sample_vulnerability() -> dict:
+    """Sample vulnerability data for testing."""
     return {
-        "_meta": {
-            "hash": {"sha256": "abc123"},
-            "pipfile-spec": 6,
-        },
-        "default": {
-            "requests": {"version": "==2.31.0", "hashes": ["sha256:abc"]},
-            "flask": {"version": "==3.0.0", "hashes": ["sha256:def"]},
-        },
-        "develop": {
-            "pytest": {"version": "==7.4.0", "hashes": ["sha256:ghi"]},
-        },
+        "id": "VULN-001",
+        "package": "test-package",
+        "version": "1.0.0",
+        "severity": "high",
+        "advisory": "Test vulnerability advisory",
+        "cve_id": "CVE-2023-12345",
+        "source": "test",
     }
