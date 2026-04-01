@@ -1,23 +1,6 @@
-"""
-API Clients for vulnerability data sources.
+"""API clients for vulnerability data sources."""
 
-This module provides clients for querying various vulnerability databases
-and security APIs including PyPI Safety, OSV.dev, and others.
-"""
+from pypi_audit.api_clients.base import BaseAPIClient
+from pypi_audit.api_clients.osv import OSVClient
 
-from .base import (
-    APIClient,
-    Vulnerability,
-    VulnerabilityReport,
-    VulnerabilitySeverity,
-)
-from .pypi_safety import PyPISafetyClient, PyPISafetyVulnerability
-
-__all__ = [
-    "APIClient",
-    "Vulnerability",
-    "VulnerabilityReport",
-    "VulnerabilitySeverity",
-    "PyPISafetyClient",
-    "PyPISafetyVulnerability",
-]
+__all__ = ["BaseAPIClient", "OSVClient"]

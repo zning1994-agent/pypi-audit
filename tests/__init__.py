@@ -1,3 +1,1 @@
-"""
-Tests package for pypi-audit.
-"""
+"""Tests for pypi-audit."""

@@ -1,3 +1,1 @@
-"""
-API client tests.
-"""
+"""Tests for API clients."""

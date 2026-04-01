@@ -1,47 +1,50 @@
-"""
-Pytest configuration and shared fixtures.
-"""
-
-from __future__ import annotations
+"""Pytest configuration and shared fixtures for pypi-audit tests."""
 
 import pytest
 
-
-def pytest_configure(config: pytest.Config) -> None:
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests (may require network)"
-    )
-    config.addinivalue_line(
-        "markers", "unit: marks tests as unit tests (no network required)"
-    )
+from pypi_audit.models import Package, SeverityLevel
 
 
 @pytest.fixture
-def sample_package_info() -> dict:
-    """Sample package info for testing."""
-    return {
-        "name": "test-package",
-        "version": "1.0.0",
-        "summary": "A test package",
-        "author": "Test Author",
-        "author_email": "test@example.com",
-        "license": "MIT",
-        "home_page": "https://example.com",
-        "classifiers": [],
-        "requires_python": ">=3.8",
-    }
+def sample_package() -> Package:
+    """Create a sample Package for testing."""
+    return Package(name="requests", version="2.28.0")
 
 
 @pytest.fixture
-def sample_vulnerability() -> dict:
-    """Sample vulnerability data for testing."""
+def vulnerable_package() -> Package:
+    """Create a package known to have vulnerabilities."""
+    return Package(name="django", version="1.0.0")
+
+
+@pytest.fixture
+def severity_levels() -> list[SeverityLevel]:
+    """Return all severity level enum values."""
+    return list(SeverityLevel)
+
+
+@pytest.fixture
+def mock_vulnerability_data() -> dict:
+    """Return mock vulnerability data for testing."""
     return {
-        "id": "VULN-001",
-        "package": "test-package",
-        "version": "1.0.0",
-        "severity": "high",
-        "advisory": "Test vulnerability advisory",
-        "cve_id": "CVE-2023-12345",
-        "source": "test",
+        "id": "OSV-TEST-1",
+        "summary": "Test vulnerability",
+        "details": "This is a test vulnerability for unit testing.",
+        "aliases": ["CVE-2021-12345"],
+        "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+        "affected": [
+            {
+                "package": {"name": "test-package", "ecosystem": "PyPI"},
+                "ranges": [
+                    {
+                        "type": "SEMVER",
+                        "events": [{"introduced": "0"}, {"fixed": "1.0.0"}],
+                    }
+                ],
+                "versions": ["0.1.0", "0.2.0", "0.9.0"],
+            }
+        ],
+        "references": [
+            {"type": "ADVISORY", "url": "https://example.com/advisory"},
+        ],
     }

@@ -1,186 +1,75 @@
-"""
-Data models for pypi-audit.
-
-Defines core data structures for packages, vulnerabilities, and audit results.
-"""
-
-from __future__ import annotations
+"""Data models for pypi-audit."""
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Optional
 
 
-class VulnerabilitySeverity(Enum):
-    """Vulnerability severity levels following CVSS standards."""
-    
-    UNKNOWN = "unknown"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+class SeverityLevel(Enum):
+    """Vulnerability severity level."""
+
     CRITICAL = "critical"
-    
-    @classmethod
-    def from_string(cls, value: str) -> "VulnerabilitySeverity":
-        """Create severity from string value."""
-        mapping = {
-            "unknown": cls.UNKNOWN,
-            "low": cls.LOW,
-            "medium": cls.MEDIUM,
-            "high": cls.HIGH,
-            "critical": cls.CRITICAL,
-        }
-        return mapping.get(value.lower(), cls.UNKNOWN)
-
-
-@dataclass
-class Vulnerability:
-    """
-    Represents a security vulnerability in a package.
-    
-    Attributes:
-        id: Unique identifier for the vulnerability.
-        package: Name of the vulnerable package.
-        version: Vulnerable version or version range.
-        severity: Severity level of the vulnerability.
-        advisory: Description or advisory text.
-        cve_id: CVE identifier if available.
-        source: API source (e.g., 'osv', 'pypi_safety', 'safety_db').
-        affected_versions: List of affected version ranges.
-        fixed_versions: List of versions with fixes.
-        published_date: When the vulnerability was published.
-        modified_date: When the vulnerability was last modified.
-        references: List of reference URLs.
-    """
-    
-    id: str
-    package: str
-    version: str
-    severity: VulnerabilitySeverity = VulnerabilitySeverity.UNKNOWN
-    advisory: str | None = None
-    cve_id: str | None = None
-    source: str = "unknown"
-    affected_versions: list[str] = field(default_factory=list)
-    fixed_versions: list[str] = field(default_factory=list)
-    published_date: str | None = None
-    modified_date: str | None = None
-    references: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    
-    @property
-    def severity_value(self) -> str:
-        """Get severity as string value."""
-        return self.severity.value
-    
-    @property
-    def is_critical(self) -> bool:
-        """Check if vulnerability is critical."""
-        return self.severity == VulnerabilitySeverity.CRITICAL
-    
-    @property
-    def has_cve(self) -> bool:
-        """Check if vulnerability has a CVE ID."""
-        return self.cve_id is not None
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "id": self.id,
-            "package": self.package,
-            "version": self.version,
-            "severity": self.severity_value,
-            "advisory": self.advisory,
-            "cve_id": self.cve_id,
-            "source": self.source,
-            "affected_versions": self.affected_versions,
-            "fixed_versions": self.fixed_versions,
-            "published_date": self.published_date,
-            "modified_date": self.modified_date,
-            "references": self.references,
-        }
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNKNOWN = "unknown"
 
 
 @dataclass
 class Package:
-    """
-    Represents a Python package with its dependencies.
-    
-    Attributes:
-        name: Package name.
-        version: Package version.
-        file_path: Path to the dependency file.
-        file_type: Type of dependency file (requirements, pyproject, pipfile).
-    """
-    
+    """Represents a Python package."""
+
     name: str
     version: str
-    file_path: str | None = None
-    file_type: str | None = None
-    
+
     def __str__(self) -> str:
-        """String representation as package==version."""
         return f"{self.name}=={self.version}"
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "name": self.name,
-            "version": self.version,
-            "file_path": self.file_path,
-            "file_type": self.file_type,
-        }
 
 
 @dataclass
-class AuditResult:
-    """
-    Result of auditing a package or project.
-    
-    Attributes:
-        package: Package that was audited.
-        vulnerabilities: List of vulnerabilities found.
-        scan_time: Time taken for the scan in seconds.
-        sources_queried: List of API sources that were queried.
-    """
-    
-    package: Package | None = None
+class Vulnerability:
+    """Represents a vulnerability."""
+
+    id: str
+    package_name: str
+    package_version: str
+    summary: str
+    details: str
+    severity: SeverityLevel
+    aliases: list[str] = field(default_factory=list)
+    fixed_versions: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    ecosystem: str = "PyPI"
+
+    def __str__(self) -> str:
+        return f"{self.id}: {self.summary}"
+
+
+@dataclass
+class VulnerabilityReference:
+    """Reference link for a vulnerability."""
+
+    type: str
+    url: str
+
+
+@dataclass
+class AffectedRange:
+    """Affected version range for a vulnerability."""
+
+    introduced: Optional[str] = None
+    fixed: Optional[str] = None
+    type: str = "semver"
+
+
+@dataclass
+class ScanResult:
+    """Result of scanning a package for vulnerabilities."""
+
+    package: Package
     vulnerabilities: list[Vulnerability] = field(default_factory=list)
-    scan_time: float = 0.0
-    sources_queried: list[str] = field(default_factory=list)
-    
+    is_vulnerable: bool = False
+
     @property
-    def has_vulnerabilities(self) -> bool:
-        """Check if any vulnerabilities were found."""
-        return len(self.vulnerabilities) > 0
-    
-    @property
-    def critical_count(self) -> int:
-        """Count of critical vulnerabilities."""
-        return sum(1 for v in self.vulnerabilities if v.is_critical)
-    
-    @property
-    def high_count(self) -> int:
-        """Count of high severity vulnerabilities."""
-        return sum(
-            1 for v in self.vulnerabilities 
-            if v.severity == VulnerabilitySeverity.HIGH
-        )
-    
-    @property
-    def total_count(self) -> int:
-        """Total number of vulnerabilities."""
+    def vulnerability_count(self) -> int:
         return len(self.vulnerabilities)
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "package": self.package.to_dict() if self.package else None,
-            "vulnerabilities": [v.to_dict() for v in self.vulnerabilities],
-            "scan_time": self.scan_time,
-            "sources_queried": self.sources_queried,
-            "summary": {
-                "total": self.total_count,
-                "critical": self.critical_count,
-                "high": self.high_count,
-            },
-        }
