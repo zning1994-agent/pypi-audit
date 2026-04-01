@@ -1,142 +1,129 @@
-"""
-Parser for pyproject.toml files.
-"""
+"""Parser for pyproject.toml files."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-try:
+from ..models import Dependency
+from .base import BaseParser
+
+# Try to import tomli for Python < 3.11, fall back to tomllib
+if sys.version_info >= (3, 11):
     import tomllib
-except ImportError:
-    import tomli as tomllib
-
-from .base import BaseParser, ParseResult
-from ..models import Package
+else:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None  # type: ignore
 
 
 class PyprojectParser(BaseParser):
-    """Parser for pyproject.toml dependency specifications."""
-    
+    """Parser for pyproject.toml dependency files."""
+
     @property
-    def name(self) -> str:
-        return "pyproject.toml"
-    
-    @property
-    def file_type(self) -> str:
-        return "pyproject"
-    
-    def can_parse(self, file_path: str) -> bool:
-        """Check if file is a pyproject.toml file."""
-        return Path(file_path).name == "pyproject.toml"
-    
-    def parse(self, file_path: str) -> ParseResult:
-        """Parse pyproject.toml file."""
-        result = ParseResult(file_path=file_path, file_type=self.file_type)
-        
+    def supported_extensions(self) -> tuple[str, ...]:
+        return (".toml",)
+
+    def can_parse(self, file_path: Path) -> bool:
+        """Check if the file is a pyproject.toml file."""
+        return file_path.name == "pyproject.toml"
+
+    def parse(self, file_path: Path) -> Iterator[Dependency]:
+        """
+        Parse a pyproject.toml file for dependencies.
+
+        Args:
+            file_path: Path to pyproject.toml
+
+        Yields:
+            Dependency objects from [project.dependencies] and [project.optional-dependencies]
+        """
+        if not file_path.exists():
+            return
+
+        if tomllib is None:
+            # Cannot parse TOML without tomli on Python < 3.11
+            return
+
         try:
             with open(file_path, "rb") as f:
                 data = tomllib.load(f)
-            
-            packages: list[Package] = []
-            
-            # Parse project.dependencies
-            if "project" in data:
-                deps = data["project"].get("dependencies", [])
-                packages.extend(self._parse_dependency_list(deps))
-                
-                # Parse optional-dependencies
-                opt_deps = data["project"].get("optional-dependencies", {})
-                for group_name, group_deps in opt_deps.items():
-                    packages.extend(
-                        self._parse_dependency_list(group_deps, group=group_name)
-                    )
-            
-            # Parse poetry dependencies (legacy)
-            if "tool" in data and "poetry" in data["tool"]:
-                poetry_deps = data["tool"]["poetry"].get("dependencies", {})
-                packages.extend(self._parse_dict_dependencies(poetry_deps))
-                
-                dev_deps = data["tool"]["poetry"].get("dev-dependencies", {})
-                packages.extend(
-                    self._parse_dict_dependencies(dev_deps, group="dev")
-                )
-            
-            result.packages = packages
-            
-        except FileNotFoundError:
-            result.errors.append(f"File not found: {file_path}")
-        except PermissionError:
-            result.errors.append(f"Permission denied: {file_path}")
-        except Exception as e:
-            result.errors.append(f"Error parsing pyproject.toml: {e}")
-        
-        return result
-    
+        except Exception:
+            return
+
+        # Parse main dependencies
+        dependencies = data.get("project", {}).get("dependencies", [])
+        yield from self._parse_dependency_list(dependencies, file_path)
+
+        # Parse optional dependencies
+        optional_deps = data.get("project", {}).get("optional-dependencies", {})
+        for extra_name, deps in optional_deps.items():
+            yield from self._parse_dependency_list(deps, file_path, extra=extra_name)
+
+        # Parse PEP 621 build dependencies
+        build_deps = data.get("project", {}).get("optional-dependencies", {}).get(
+            "test", []
+        )
+        yield from self._parse_dependency_list(build_deps, file_path, extra="build")
+
+        # Also check legacy poetry-style dependencies
+        poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+        yield from self._parse_poetry_dependencies(poetry_deps, file_path)
+
     def _parse_dependency_list(
-        self, 
-        deps: list[str], 
-        group: str | None = None
-    ) -> list[Package]:
-        """Parse list of dependency strings."""
-        packages: list[Package] = []
-        
-        for dep in deps:
-            pkg = self._parse_requirement_string(dep)
-            if pkg:
-                pkg.file_type = self.file_type
-                if group:
-                    pkg.file_path = f"pyproject.toml:{group}"
-                else:
-                    pkg.file_path = "pyproject.toml"
-                packages.append(pkg)
-        
-        return packages
-    
-    def _parse_dict_dependencies(
-        self, 
-        deps: dict[str, Any],
-        group: str | None = None
-    ) -> list[Package]:
-        """Parse dict-style dependency specifications."""
-        packages: list[Package] = []
-        
-        for name, spec in deps.items():
+        self, dependencies: list[str], source_file: Path, extra: str | None = None
+    ) -> Iterator[Dependency]:
+        """Parse a list of dependency strings."""
+        for dep in dependencies:
+            dep_obj = self._parse_dependency_string(dep, source_file, extra)
+            if dep_obj:
+                yield dep_obj
+
+    def _parse_dependency_string(
+        self, dep: str, source_file: Path, extra: str | None = None
+    ) -> Dependency | None:
+        """Parse a single dependency string like 'requests>=2.0'."""
+        import re
+
+        # Match package name and version specifier
+        pattern = re.compile(
+            r'^([a-zA-Z0-9][-a-zA-Z0-9._]*)'  # Package name
+            r'((?:[=<>!~]+|>=?|<=?)(?:[\d.]+(?:[a-zA-Z0-9._-]+)?)?)?'  # Version
+            r'(?:\[.*?\])?'  # Extras (strip them)
+        )
+        match = pattern.match(dep.strip())
+        if match:
+            name = match.group(1)
+            version = match.group(2) or "*"
+            return Dependency(
+                name=name,
+                version=version,
+                source_file=str(source_file),
+                line_number=None,
+            )
+        return None
+
+    def _parse_poetry_dependencies(
+        self, dependencies: dict[str, Any], source_file: Path
+    ) -> Iterator[Dependency]:
+        """Parse Poetry-style dependencies."""
+        for name, spec in dependencies.items():
+            # Skip Python itself
+            if name == "python":
+                continue
+
             if isinstance(spec, str):
                 version = spec
             elif isinstance(spec, dict):
                 version = spec.get("version", "*")
             else:
                 version = "*"
-            
-            pkg = Package(name=name, version=version)
-            pkg.file_type = self.file_type
-            if group:
-                pkg.file_path = f"pyproject.toml:poetry:{group}"
-            else:
-                pkg.file_path = "pyproject.toml:poetry"
-            
-            packages.append(pkg)
-        
-        return packages
-    
-    def _parse_requirement_string(self, requirement: str) -> Package | None:
-        """Parse a single requirement string."""
-        import re
-        
-        # Simple version specifier parsing
-        patterns = [
-            r"^([a-zA-Z0-9._-]+)\s*([<>=!~]+)\s*([a-zA-Z0-9._*+-]+)",
-            r"^([a-zA-Z0-9._-]+)\s*\[.*?\]\s*([<>=!~]+)?.*",
-            r"^([a-zA-Z0-9._-]+)",
-        ]
-        
-        for pattern in patterns:
-            match = re.match(pattern, requirement)
-            if match:
-                name = match.group(1)
-                version = match.group(3) if match.lastindex >= 3 else "*"
-                return Package(name=name, version=version)
-        
-        return None
+
+            yield Dependency(
+                name=name,
+                version=version,
+                source_file=str(source_file),
+                line_number=None,
+            )

@@ -1,78 +1,93 @@
-"""
-Parser for Pipfile.lock files.
-"""
+"""Parser for Pipfile.lock files."""
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-try:
+from ..models import Dependency
+from .base import BaseParser
+
+# Try to import tomli for Python < 3.11, fall back to tomllib
+if sys.version_info >= (3, 11):
     import tomllib
-except ImportError:
-    import tomli as tomllib
-
-from .base import BaseParser, ParseResult
-from ..models import Package
+else:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None  # type: ignore
 
 
 class PipfileParser(BaseParser):
-    """Parser for Pipfile.lock files."""
-    
+    """Parser for Pipfile.lock dependency files."""
+
     @property
-    def name(self) -> str:
-        return "Pipfile.lock"
-    
-    @property
-    def file_type(self) -> str:
-        return "pipfile"
-    
-    def can_parse(self, file_path: str) -> bool:
-        """Check if file is a Pipfile.lock file."""
-        return Path(file_path).name == "Pipfile.lock"
-    
-    def parse(self, file_path: str) -> ParseResult:
-        """Parse Pipfile.lock file."""
-        result = ParseResult(file_path=file_path, file_type=self.file_type)
-        
+    def supported_extensions(self) -> tuple[str, ...]:
+        return (".lock",)
+
+    def can_parse(self, file_path: Path) -> bool:
+        """Check if the file is a Pipfile.lock file."""
+        return file_path.name == "Pipfile.lock"
+
+    def parse(self, file_path: Path) -> Iterator[Dependency]:
+        """
+        Parse a Pipfile.lock file for dependencies.
+
+        Args:
+            file_path: Path to Pipfile.lock
+
+        Yields:
+            Dependency objects from the lock file
+        """
+        if not file_path.exists():
+            return
+
         try:
-            with open(file_path, "rb") as f:
-                data = tomllib.load(f)
-            
-            packages: list[Package] = []
-            
-            # Parse default dependencies
-            if "default" in data:
-                packages.extend(self._parse_lock_section(data["default"]))
-            
-            # Parse develop dependencies
-            if "develop" in data:
-                packages.extend(self._parse_lock_section(data["develop"]))
-            
-            result.packages = packages
-            
-        except FileNotFoundError:
-            result.errors.append(f"File not found: {file_path}")
-        except PermissionError:
-            result.errors.append(f"Permission denied: {file_path}")
-        except Exception as e:
-            result.errors.append(f"Error parsing Pipfile.lock: {e}")
-        
-        return result
-    
-    def _parse_lock_section(self, section: dict[str, Any]) -> list[Package]:
-        """Parse a lock file section (default or develop)."""
-        packages: list[Package] = []
-        
-        for name, info in section.items():
-            if isinstance(info, dict):
-                version = info.get("version", "*")
-                if version.startswith("=="):
-                    version = version[2:]
-                
-                pkg = Package(name=name, version=version)
-                pkg.file_type = self.file_type
-                pkg.file_path = "Pipfile.lock"
-                packages.append(pkg)
-        
-        return packages
+            data = self._load_lock_file(file_path)
+        except Exception:
+            return
+
+        if not data:
+            return
+
+        # Parse default dependencies
+        default_deps = data.get("default", {})
+        yield from self._parse_dep_dict(default_deps, file_path)
+
+        # Parse develop dependencies
+        develop_deps = data.get("develop", {})
+        yield from self._parse_dep_dict(develop_deps, file_path)
+
+    def _load_lock_file(self, file_path: Path) -> dict[str, Any]:
+        """Load Pipfile.lock content."""
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Pipfile.lock can also be TOML format in some cases
+        # But typically it's JSON
+        return data
+
+    def _parse_dep_dict(
+        self, dependencies: dict[str, Any], source_file: Path
+    ) -> Iterator[Dependency]:
+        """Parse a dictionary of dependencies from Pipfile.lock."""
+        for name, spec in dependencies.items():
+            if not isinstance(spec, dict):
+                continue
+
+            # Get version from the lock file spec
+            version = spec.get("version", "*")
+
+            # Handle different version formats
+            if isinstance(version, str):
+                # Remove prefixes like "==", ">=", etc.
+                version = version.lstrip("=<>!~")
+
+            yield Dependency(
+                name=name,
+                version=version or "*",
+                source_file=str(source_file),
+                line_number=None,
+            )

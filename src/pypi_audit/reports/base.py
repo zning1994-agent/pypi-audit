@@ -1,8 +1,8 @@
-"""Base report class."""
+"""Base report class for vulnerability scan results."""
 
 from abc import ABC, abstractmethod
 
-from pypi_audit.models import ScanResult
+from ..models import ScanResult
 
 
 class BaseReport(ABC):
@@ -10,18 +10,20 @@ class BaseReport(ABC):
 
     @abstractmethod
     def generate(self, result: ScanResult) -> None:
-        """Generate the report from scan results.
+        """
+        Generate a report from scan results.
 
         Args:
-            result: The scan result to report on.
+            result: The scan result to report
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def print_summary(self, result: ScanResult) -> None:
-        """Print a summary of the scan results.
+    def print_summary(self, results: list[ScanResult]) -> None:
+        """
+        Print summary of multiple scan results.
 
         Args:
-            result: The scan result to summarize.
+            results: List of scan results to summarize
         """
-        pass
+        raise NotImplementedError

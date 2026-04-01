@@ -1,63 +1,60 @@
 """Base API client for vulnerability data sources."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING
 
-from pypi_audit.models import Package, Vulnerability
+from ..models import Dependency, Vulnerability
+
+if TYPE_CHECKING:
+    import httpx
 
 
 class BaseAPIClient(ABC):
     """Abstract base class for vulnerability API clients."""
 
-    def __init__(self, timeout: int = 30) -> None:
-        """Initialize the API client.
+    def __init__(self, http_client: "httpx.Client | None" = None) -> None:
+        """
+        Initialize the API client.
 
         Args:
-            timeout: Request timeout in seconds.
+            http_client: Optional shared HTTP client
         """
-        self.timeout = timeout
+        self._http_client = http_client
+        self._owns_client = http_client is None
 
     @abstractmethod
-    def query_package(self, package: Package) -> list[Vulnerability]:
-        """Query vulnerabilities for a package.
+    def get_vulnerabilities(self, dependency: Dependency) -> list[Vulnerability]:
+        """
+        Get vulnerabilities for a dependency.
 
         Args:
-            package: The package to query.
+            dependency: The dependency to check
 
         Returns:
-            List of vulnerabilities found for the package.
+            List of vulnerabilities affecting this dependency
         """
-        ...
+        raise NotImplementedError
 
-    def _parse_severity(self, severity_data: Any) -> "SeverityLevel":
-        """Parse severity data from API response.
-
-        Args:
-            severity_data: Raw severity data from API.
+    @abstractmethod
+    def is_available(self) -> bool:
+        """
+        Check if the API is available.
 
         Returns:
-            Parsed severity level.
+            True if the API is reachable, False otherwise
         """
-        from pypi_audit.models import SeverityLevel
+        raise NotImplementedError
 
-        if not severity_data:
-            return SeverityLevel.UNKNOWN
+    def close(self) -> None:
+        """Close the HTTP client if we own it."""
+        if self._owns_client and self._http_client:
+            self._http_client.close()
+            self._http_client = None
 
-        if isinstance(severity_data, dict):
-            score = severity_data.get("score", "")
-            if isinstance(score, (int, float)):
-                if score >= 9.0:
-                    return SeverityLevel.CRITICAL
-                elif score >= 7.0:
-                    return SeverityLevel.HIGH
-                elif score >= 4.0:
-                    return SeverityLevel.MEDIUM
-                elif score > 0:
-                    return SeverityLevel.LOW
-            elif isinstance(score, str):
-                score_upper = score.upper()
-                for level in SeverityLevel:
-                    if level.value.upper() in score_upper:
-                        return level
+    def __enter__(self) -> "BaseAPIClient":
+        """Context manager entry."""
+        return self
 
-        return SeverityLevel.UNKNOWN
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        """Context manager exit."""
+        self.close()

@@ -1,81 +1,43 @@
-"""
-Base parser class for dependency files.
-"""
-
-from __future__ import annotations
+"""Base parser for dependency files."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Iterator
 
-if TYPE_CHECKING:
-    from ..models import Package
-
-
-@dataclass
-class ParseResult:
-    """Result of parsing a dependency file."""
-    
-    file_path: str
-    file_type: str
-    packages: list["Package"] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    parse_time: float = 0.0
-    
-    @property
-    def has_errors(self) -> bool:
-        """Check if there were parsing errors."""
-        return len(self.errors) > 0
-    
-    @property
-    def has_warnings(self) -> bool:
-        """Check if there were warnings."""
-        return len(self.warnings) > 0
-    
-    @property
-    def package_count(self) -> int:
-        """Number of packages parsed."""
-        return len(self.packages)
+from ..models import Dependency
 
 
 class BaseParser(ABC):
     """Abstract base class for dependency file parsers."""
-    
+
     @property
     @abstractmethod
-    def name(self) -> str:
-        """Parser name."""
-        pass
-    
-    @property
+    def supported_extensions(self) -> tuple[str, ...]:
+        """Return supported file extensions."""
+        raise NotImplementedError
+
     @abstractmethod
-    def file_type(self) -> str:
-        """Type of file this parser handles."""
-        pass
-    
-    @abstractmethod
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: Path) -> Iterator[Dependency]:
         """
-        Parse a dependency file.
-        
+        Parse a dependency file and yield Dependency objects.
+
         Args:
-            file_path: Path to the dependency file.
-            
-        Returns:
-            ParseResult with parsed packages and any errors/warnings.
+            file_path: Path to the dependency file
+
+        Yields:
+            Dependency objects found in the file
         """
-        pass
-    
+        raise NotImplementedError
+
     @abstractmethod
-    def can_parse(self, file_path: str) -> bool:
+    def can_parse(self, file_path: Path) -> bool:
         """
         Check if this parser can handle the given file.
-        
+
         Args:
-            file_path: Path to check.
-            
+            file_path: Path to the file to check
+
         Returns:
-            True if this parser can handle the file.
+            True if this parser can handle the file, False otherwise
         """
-        pass
+        raise NotImplementedError
