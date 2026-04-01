@@ -1,1 +1,1 @@
-"""Reports module."""
+"""Reports module for pypi-audit."""

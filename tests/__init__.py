@@ -1,1 +1,1 @@
-"""Test module initialization."""
+"""Test suite for pypi-audit."""

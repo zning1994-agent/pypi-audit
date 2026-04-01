@@ -1,6 +1,10 @@
-"""Package parsers for different dependency file formats."""
+"""Parsers for Python dependency files."""
 
 from .base import BaseParser
-from .pyproject import PyprojectParser
+from .pipfile import PipfileLockParser, parse_pipfile_lock
 
-__all__ = ["BaseParser", "PyprojectParser"]
+__all__ = [
+    "BaseParser",
+    "PipfileLockParser",
+    "parse_pipfile_lock",
+]

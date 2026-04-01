@@ -1,18 +1,18 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "pypi-audit"
 version = "0.1.0"
-description = "Zero-config Python package security auditing tool"
+description = "Zero-config Python dependency security audit tool"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    {name = "Developer", email = "dev@example.com"},
+    { name = "Developer" },
 ]
-keywords = ["security", "audit", "pypi", "vulnerability", "supply-chain"]
+keywords = ["security", "pypi", "audit", "vulnerability", "supply-chain"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -23,41 +23,40 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Security",
 ]
+
 dependencies = [
     "click>=8.0.0",
     "httpx>=0.25.0",
     "packaging>=23.0",
     "rich>=13.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "pipfile>=0.0.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
     "ruff>=0.1.0",
     "mypy>=1.7.0",
-    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [project.scripts]
 pypi-audit = "pypi_audit.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/pypi_audit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
-
 [tool.mypy]
 python_version = "3.10"
-warn_return_any = true
-warn_unused_ignores = true
-ignore_missing_imports = true
+strict = true
