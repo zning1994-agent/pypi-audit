@@ -1,29 +1,35 @@
-"""Base report class for vulnerability scan results."""
+"""
+Base reporter class for pypi-audit.
+"""
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from ..models import ScanResult
+from pypi_audit.models import ScanResult, OutputFormat
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 
-class BaseReport(ABC):
-    """Abstract base class for report generators."""
-
-    @abstractmethod
-    def generate(self, result: ScanResult) -> None:
+class BaseReporter(ABC):
+    """Abstract base class for all reporters."""
+    
+    def __init__(self, console: "Console | None" = None) -> None:
         """
-        Generate a report from scan results.
-
+        Initialize the reporter.
+        
         Args:
-            result: The scan result to report
+            console: Rich console instance for output.
         """
-        raise NotImplementedError
-
+        self.console = console
+    
     @abstractmethod
-    def print_summary(self, results: list[ScanResult]) -> None:
+    def print_report(self, results: ScanResult, output_format: OutputFormat) -> None:
         """
-        Print summary of multiple scan results.
-
+        Print the scan report.
+        
         Args:
-            results: List of scan results to summarize
+            results: The scan results to report.
+            output_format: The output format to use.
         """
-        raise NotImplementedError
+        pass

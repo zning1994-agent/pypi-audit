@@ -1,9 +1,13 @@
-"""Report generators for vulnerability scan results."""
+"""
+pypi-audit Reports Module.
 
-from .base import BaseReport
-from .terminal import TerminalReport
+This module contains report generators for different output formats.
+"""
+
+from pypi_audit.reports.base import BaseReporter
+from pypi_audit.reports.terminal import TerminalReporter
 
 __all__ = [
-    "BaseReport",
-    "TerminalReport",
+    "BaseReporter",
+    "TerminalReporter",
 ]
