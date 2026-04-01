@@ -1,60 +1,41 @@
-"""Base API client for vulnerability data sources."""
+"""Base API client for security vulnerability data sources."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
-
-from ..models import Dependency, Vulnerability
-
-if TYPE_CHECKING:
-    import httpx
+from typing import Any
 
 
 class BaseAPIClient(ABC):
-    """Abstract base class for vulnerability API clients."""
+    """Abstract base class for API clients."""
 
-    def __init__(self, http_client: "httpx.Client | None" = None) -> None:
-        """
-        Initialize the API client.
-
+    def __init__(self, timeout: int = 30):
+        """Initialize the API client.
+        
         Args:
-            http_client: Optional shared HTTP client
+            timeout: Request timeout in seconds.
         """
-        self._http_client = http_client
-        self._owns_client = http_client is None
+        self.timeout = timeout
 
     @abstractmethod
-    def get_vulnerabilities(self, dependency: Dependency) -> list[Vulnerability]:
-        """
-        Get vulnerabilities for a dependency.
-
+    def check_vulnerability(self, package_name: str, version: str) -> list[dict[str, Any]]:
+        """Check if a package version has known vulnerabilities.
+        
         Args:
-            dependency: The dependency to check
-
+            package_name: Name of the package.
+            version: Version string.
+            
         Returns:
-            List of vulnerabilities affecting this dependency
+            List of vulnerability dictionaries.
         """
-        raise NotImplementedError
+        pass
 
     @abstractmethod
-    def is_available(self) -> bool:
-        """
-        Check if the API is available.
-
+    def get_vulnerability_details(self, vulnerability_id: str) -> dict[str, Any] | None:
+        """Get detailed information about a specific vulnerability.
+        
+        Args:
+            vulnerability_id: The vulnerability identifier.
+            
         Returns:
-            True if the API is reachable, False otherwise
+            Vulnerability details or None if not found.
         """
-        raise NotImplementedError
-
-    def close(self) -> None:
-        """Close the HTTP client if we own it."""
-        if self._owns_client and self._http_client:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> "BaseAPIClient":
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
-        """Context manager exit."""
-        self.close()
+        pass

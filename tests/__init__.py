@@ -1,1 +1,1 @@
-"""Tests package for pypi_audit."""
+"""Pytest configuration and fixtures for pypi-audit tests."""

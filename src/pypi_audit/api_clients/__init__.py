@@ -1,11 +1,7 @@
-"""API clients for vulnerability data sources."""
+"""API clients for security vulnerability data sources."""
 
 from .base import BaseAPIClient
-from .osv import OSVClient
 from .pypi_safety import PyPISafetyClient
+from .osv import OSVClient
 
-__all__ = [
-    "BaseAPIClient",
-    "PyPISafetyClient",
-    "OSVClient",
-]
+__all__ = ["BaseAPIClient", "PyPISafetyClient", "OSVClient"]

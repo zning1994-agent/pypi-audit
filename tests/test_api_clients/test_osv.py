@@ -1,461 +1,451 @@
 """Unit tests for OSV.dev API client."""
 
-import json
-from unittest.mock import MagicMock, patch
-
 import pytest
+import httpx
+from unittest.mock import patch, Mock
+from typing import Any
 
 from pypi_audit.api_clients.osv import OSVClient
-from pypi_audit.models import Package, SeverityLevel, Vulnerability
 
 
 class TestOSVClient:
     """Test suite for OSVClient."""
 
-    @pytest.fixture
-    def client(self) -> OSVClient:
-        """Create an OSVClient instance for testing."""
-        return OSVClient(timeout=10)
+    def test_init_default_timeout(self):
+        """Test client initialization with default timeout."""
+        client = OSVClient()
+        assert client.timeout == 30
 
-    @pytest.fixture
-    def sample_package(self) -> Package:
-        """Create a sample package for testing."""
-        return Package(name="django", version="1.2.3")
-
-    @pytest.fixture
-    def mock_vuln_response(self) -> dict:
-        """Create a mock OSV API response with vulnerabilities."""
-        return {
-            "vulns": [
-                {
-                    "id": "OSV-2021-1",
-                    "summary": "Remote code execution in Django",
-                    "details": "Django is vulnerable to remote code execution...",
-                    "aliases": ["CVE-2021-12345", "GHSA-xxxx-xxxx"],
-                    "severity": [
-                        {
-                            "type": "CVSS_V3",
-                            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-                        }
-                    ],
-                    "affected": [
-                        {
-                            "package": {
-                                "name": "django",
-                                "ecosystem": "PyPI",
-                            },
-                            "ranges": [
-                                {
-                                    "type": "SEMVER",
-                                    "events": [
-                                        {"introduced": "0"},
-                                        {"fixed": "3.2.1"},
-                                    ],
-                                }
-                            ],
-                            "versions": ["1.0.0", "1.1.0", "1.2.0", "1.2.1"],
-                        }
-                    ],
-                    "references": [
-                        {
-                            "type": "ADVISORY",
-                            "url": "https://example.com/advisory",
-                        },
-                        {
-                            "type": "FIX",
-                            "url": "https://github.com/django/django/pull/123",
-                        },
-                    ],
-                },
-                {
-                    "id": "OSV-2021-2",
-                    "summary": "SQL injection vulnerability",
-                    "details": "SQL injection in Django ORM...",
-                    "aliases": [],
-                    "severity": [
-                        {
-                            "type": "CVSS_V3",
-                            "score": "7.5",
-                        }
-                    ],
-                    "affected": [
-                        {
-                            "package": {
-                                "name": "django",
-                                "ecosystem": "PyPI",
-                            },
-                            "ranges": [
-                                {
-                                    "type": "SEMVER",
-                                    "events": [
-                                        {"introduced": "1.0.0"},
-                                        {"fixed": "2.0.0"},
-                                    ],
-                                }
-                            ],
-                            "versions": ["1.0.0", "1.1.0"],
-                        }
-                    ],
-                    "references": [],
-                },
-            ]
-        }
-
-    def test_client_initialization(self, client: OSVClient) -> None:
-        """Test client initializes with correct default values."""
-        assert client.timeout == 10
-        assert client.BASE_URL == "https://api.osv.dev/v1"
-        assert client.ECOSYSTEM == "PyPI"
-
-    def test_client_custom_timeout(self) -> None:
-        """Test client can be initialized with custom timeout."""
+    def test_init_custom_timeout(self):
+        """Test client initialization with custom timeout."""
         client = OSVClient(timeout=60)
         assert client.timeout == 60
 
-    def test_query_package_builds_correct_payload(
-        self, client: OSVClient, sample_package: Package
-    ) -> None:
-        """Test that query_package sends correct payload to API."""
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.return_value = {"vulns": []}
-            client.query_package(sample_package)
+    def test_base_url(self):
+        """Test base URL is correctly set."""
+        client = OSVClient()
+        assert client.BASE_URL == "https://api.osv.dev/v1"
 
-            mock_request.assert_called_once()
-            call_args = mock_request.call_args
-            assert call_args[0][0] == "/query"
-            payload = call_args[0][1]
-            assert payload["package"]["name"] == "django"
-            assert payload["package"]["ecosystem"] == "PyPI"
-            assert payload["version"] == "1.2.3"
 
-    def test_query_package_returns_vulnerabilities(
-        self,
-        client: OSVClient,
-        sample_package: Package,
-        mock_vuln_response: dict,
-    ) -> None:
-        """Test that query_package correctly parses vulnerabilities."""
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.return_value = mock_vuln_response
-            vulnerabilities = client.query_package(sample_package)
+class TestCheckVulnerability:
+    """Test suite for check_vulnerability method."""
 
-            assert len(vulnerabilities) == 2
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_success(self, mock_post: Mock, sample_osv_response: dict[str, Any]):
+        """Test successful vulnerability check."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = sample_osv_response
+        mock_post.return_value = mock_response
 
-            # Check first vulnerability
-            vuln1 = vulnerabilities[0]
-            assert vuln1.id == "OSV-2021-1"
-            assert vuln1.package_name == "django"
-            assert vuln1.package_version == "1.2.3"
-            assert "Remote code execution" in vuln1.summary
-            assert "CVE-2021-12345" in vuln1.aliases
-            assert "GHSA-xxxx-xxxx" in vuln1.aliases
-            assert "3.2.1" in vuln1.fixed_versions
-            assert "https://example.com/advisory" in vuln1.references
+        client = OSVClient()
+        result = client.check_vulnerability("sample-package", "1.0.0")
 
-            # Check second vulnerability
-            vuln2 = vulnerabilities[1]
-            assert vuln2.id == "OSV-2021-2"
-            assert "SQL injection" in vuln2.summary
-            assert "2.0.0" in vuln2.fixed_versions
+        assert len(result) == 1
+        assert result[0]["id"] == "OSV-2024-001"
+        assert result[0]["summary"] == "Remote code execution vulnerability"
+        mock_post.assert_called_once()
 
-    def test_query_package_empty_response(
-        self, client: OSVClient, sample_package: Package
-    ) -> None:
-        """Test query_package handles empty response correctly."""
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.return_value = {"vulns": []}
-            vulnerabilities = client.query_package(sample_package)
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_no_vulnerabilities(self, mock_post: Mock):
+        """Test check when no vulnerabilities exist."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
 
-            assert vulnerabilities == []
+        client = OSVClient()
+        result = client.check_vulnerability("safe-package", "1.0.0")
 
-    def test_query_package_no_vulns_key(
-        self, client: OSVClient, sample_package: Package
-    ) -> None:
-        """Test query_package handles response without vulns key."""
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.return_value = {}
-            vulnerabilities = client.query_package(sample_package)
+        assert result == []
 
-            assert vulnerabilities == []
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_request_error(self, mock_post: Mock):
+        """Test check handles request errors gracefully."""
+        mock_post.side_effect = httpx.RequestError("Connection failed")
 
-    def test_query_package_handles_network_error(
-        self, client: OSVClient, sample_package: Package
-    ) -> None:
-        """Test query_package handles URLError gracefully."""
-        import urllib.error
+        client = OSVClient()
+        result = client.check_vulnerability("requests", "2.28.0")
 
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.side_effect = urllib.error.URLError("Connection refused")
-            vulnerabilities = client.query_package(sample_package)
+        assert result == []
 
-            assert vulnerabilities == []
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_timeout(self, mock_post: Mock):
+        """Test check respects timeout setting."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
 
-    def test_parse_severity_cvss_high(self, client: OSVClient) -> None:
-        """Test severity parsing for high severity CVSS."""
-        severity_data = [
-            {
-                "type": "CVSS_V3",
-                "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-            }
-        ]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.HIGH
+        client = OSVClient(timeout=15)
+        client.check_vulnerability("requests", "2.28.0")
 
-    def test_parse_severity_numeric_critical(self, client: OSVClient) -> None:
-        """Test severity parsing for numeric critical score."""
-        severity_data = [{"type": "CVSS_V3", "score": "9.8"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.CRITICAL
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["timeout"] == 15
 
-    def test_parse_severity_numeric_high(self, client: OSVClient) -> None:
-        """Test severity parsing for numeric high score."""
-        severity_data = [{"type": "CVSS_V3", "score": "7.5"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.HIGH
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_api_returns_404(self, mock_post: Mock):
+        """Test check handles 404 response."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_post.return_value = mock_response
 
-    def test_parse_severity_numeric_medium(self, client: OSVClient) -> None:
-        """Test severity parsing for numeric medium score."""
-        severity_data = [{"type": "CVSS_V3", "score": "5.0"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.MEDIUM
+        client = OSVClient()
+        result = client.check_vulnerability("nonexistent", "1.0.0")
 
-    def test_parse_severity_numeric_low(self, client: OSVClient) -> None:
-        """Test severity parsing for numeric low score."""
-        severity_data = [{"type": "CVSS_V3", "score": "3.5"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.LOW
+        assert result == []
 
-    def test_parse_severity_empty(self, client: OSVClient) -> None:
-        """Test severity parsing for empty severity data."""
-        severity = client._parse_severity_osv(None)
-        assert severity == SeverityLevel.UNKNOWN
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_check_vulnerability_pypi_ecosystem(self, mock_post: Mock, sample_osv_response: dict[str, Any]):
+        """Test check uses PyPI ecosystem."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = sample_osv_response
+        mock_post.return_value = mock_response
 
-        severity = client._parse_severity_osv([])
-        assert severity == SeverityLevel.UNKNOWN
+        client = OSVClient()
+        client.check_vulnerability("requests", "2.28.0")
 
-    def test_parse_severity_no_score(self, client: OSVClient) -> None:
-        """Test severity parsing when score is missing."""
-        severity_data = [{"type": "CVSS_V3"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.UNKNOWN
+        call_args = mock_post.call_args
+        request_body = call_args[0][1]  # Second positional arg is json
+        assert request_body["package"]["ecosystem"] == "PyPI"
+        assert request_body["package"]["name"] == "requests"
 
-    def test_extract_fixed_versions(
-        self, client: OSVClient, mock_vuln_response: dict
-    ) -> None:
-        """Test extraction of fixed versions from affected ranges."""
-        affected = mock_vuln_response["vulns"][0]["affected"]
-        fixed_versions = client._extract_fixed_versions(affected)
 
-        assert "3.2.1" in fixed_versions
+class TestParseOSVResponse:
+    """Test suite for _parse_osv_response method."""
 
-    def test_extract_fixed_versions_empty(self, client: OSVClient) -> None:
-        """Test extraction with no fixed versions."""
-        fixed_versions = client._extract_fixed_versions([])
-        assert fixed_versions == []
+    def test_parse_single_vulnerability(self, sample_osv_response: dict[str, Any]):
+        """Test parsing single vulnerability."""
+        client = OSVClient()
+        result = client._parse_osv_response(sample_osv_response, "pkg", "1.0")
 
-    def test_extract_fixed_versions_ignores_other_ecosystems(
-        self, client: OSVClient
-    ) -> None:
-        """Test that non-PyPI packages are ignored."""
+        assert len(result) == 1
+        vuln = result[0]
+        assert vuln["id"] == "OSV-2024-001"
+        assert vuln["summary"] == "Remote code execution vulnerability"
+        assert vuln["details"] == "Detailed description of the vulnerability"
+        assert "CVSS_V3:9.8" in vuln["severity"]
+
+    def test_parse_multiple_vulnerabilities(self):
+        """Test parsing multiple vulnerabilities."""
+        data = {
+            "vulns": [
+                {"id": "OSV-001", "summary": "First", "details": "", "severity": [], "references": [], "affected": []},
+                {"id": "OSV-002", "summary": "Second", "details": "", "severity": [], "references": [], "affected": []},
+                {"id": "OSV-003", "summary": "Third", "details": "", "severity": [], "references": [], "affected": []},
+            ]
+        }
+
+        client = OSVClient()
+        result = client._parse_osv_response(data, "pkg", "1.0")
+
+        assert len(result) == 3
+
+    def test_parse_empty_vulns(self):
+        """Test parsing empty vulnerability list."""
+        data = {"vulns": []}
+
+        client = OSVClient()
+        result = client._parse_osv_response(data, "pkg", "1.0")
+
+        assert result == []
+
+    def test_parse_missing_vulns_key(self):
+        """Test parsing response without vulns key."""
+        data = {}
+
+        client = OSVClient()
+        result = client._parse_osv_response(data, "pkg", "1.0")
+
+        assert result == []
+
+
+class TestExtractSeverity:
+    """Test suite for _extract_severity method."""
+
+    def test_extract_cvss_v3_severity(self):
+        """Test extracting CVSS V3 severity."""
+        vuln = {
+            "severity": [
+                {"type": "CVSS_V3", "score": "9.8"}
+            ]
+        }
+
+        client = OSVClient()
+        result = client._extract_severity(vuln)
+
+        assert result == "CVSS_V3:9.8"
+
+    def test_extract_cvss_v2_severity(self):
+        """Test extracting CVSS V2 severity (falls back to unknown)."""
+        vuln = {
+            "severity": [
+                {"type": "CVSS_V2", "score": "7.5"}
+            ]
+        }
+
+        client = OSVClient()
+        result = client._extract_severity(vuln)
+
+        assert result == "UNKNOWN"
+
+    def test_extract_no_severity(self):
+        """Test extracting when no severity info exists."""
+        vuln = {}
+
+        client = OSVClient()
+        result = client._extract_severity(vuln)
+
+        assert result == "UNKNOWN"
+
+    def test_extract_empty_severity_list(self):
+        """Test extracting when severity list is empty."""
+        vuln = {"severity": []}
+
+        client = OSVClient()
+        result = client._extract_severity(vuln)
+
+        assert result == "UNKNOWN"
+
+    def test_extract_cvss_v3_priority_over_other_types(self):
+        """Test that CVSS_V3 is prioritized over other types."""
+        vuln = {
+            "severity": [
+                {"type": "CVSS_V2", "score": "9.8"},
+                {"type": "CVSS_V3", "score": "7.5"}
+            ]
+        }
+
+        client = OSVClient()
+        result = client._extract_severity(vuln)
+
+        assert result == "CVSS_V3:7.5"
+
+
+class TestFormatAffected:
+    """Test suite for _format_affected method."""
+
+    def test_format_affected_packages(self):
+        """Test formatting affected packages."""
         affected = [
-            {
-                "package": {
-                    "name": "django",
-                    "ecosystem": "npm",  # Wrong ecosystem
-                },
-                "ranges": [
-                    {
-                        "type": "SEMVER",
-                        "events": [{"fixed": "99.0.0"}],
-                    }
-                ],
-            }
+            {"package": {"name": "pkg1", "ecosystem": "PyPI"}},
+            {"package": {"name": "pkg2", "ecosystem": "PyPI"}}
         ]
-        fixed_versions = client._extract_fixed_versions(affected)
-        assert "99.0.0" not in fixed_versions
 
-    def test_parse_references(self, client: OSVClient) -> None:
-        """Test parsing of reference URLs."""
-        references = [
-            {"type": "ADVISORY", "url": "https://example.com/1"},
-            {"type": "FIX", "url": "https://example.com/2"},
-            {"type": "WEB", "url": "https://example.com/3"},
-        ]
-        urls = client._parse_references(references)
+        client = OSVClient()
+        result = client._format_affected(affected)
 
-        assert len(urls) == 3
-        assert "https://example.com/1" in urls
-        assert "https://example.com/2" in urls
-        assert "https://example.com/3" in urls
+        assert "pkg1" in result
+        assert "pkg2" in result
 
-    def test_parse_references_empty(self, client: OSVClient) -> None:
-        """Test parsing empty references list."""
-        urls = client._parse_references([])
-        assert urls == []
+    def test_format_empty_affected(self):
+        """Test formatting empty affected list."""
+        client = OSVClient()
+        result = client._format_affected([])
 
-    def test_parse_references_missing_url(self, client: OSVClient) -> None:
-        """Test parsing references with missing URLs."""
-        references = [
-            {"type": "ADVISORY"},  # No URL
-            {"type": "FIX", "url": "https://example.com/2"},
-        ]
-        urls = client._parse_references(references)
-        assert len(urls) == 1
-        assert "https://example.com/2" in urls
+        assert result == "Unknown"
 
-    def test_query_package_name(self, client: OSVClient) -> None:
-        """Test querying by package name without version."""
-        with patch.object(client, "_make_request") as mock_request:
-            mock_request.return_value = {"vulns": []}
-            client.query_package_name("requests")
+    def test_format_missing_package_name(self):
+        """Test formatting when package name is missing."""
+        affected = [{"package": {}}]
 
-            mock_request.assert_called_once()
-            call_args = mock_request.call_args
-            payload = call_args[0][1]
-            assert payload["package"]["name"] == "requests"
-            assert payload["package"]["ecosystem"] == "PyPI"
-            assert "version" not in payload
+        client = OSVClient()
+        result = client._format_affected(affected)
 
-    def test_get_vulnerability_details_success(self, client: OSVClient) -> None:
-        """Test fetching vulnerability details by ID."""
-        mock_details = {
-            "id": "OSV-2021-1",
+        assert result == "Unknown"
+
+
+class TestGetVulnerabilityDetails:
+    """Test suite for get_vulnerability_details method."""
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_get_details_success(self, mock_post: Mock):
+        """Test successful retrieval of vulnerability details."""
+        details = {
+            "id": "OSV-2024-001",
             "summary": "Test vulnerability",
-            "details": "Detailed description",
+            "details": "Detailed description"
+        }
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = details
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.get_vulnerability_details("OSV-2024-001")
+
+        assert result == details
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_get_details_not_found(self, mock_post: Mock):
+        """Test retrieval when vulnerability not found."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.get_vulnerability_details("NONEXISTENT")
+
+        assert result is None
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_get_details_request_error(self, mock_post: Mock):
+        """Test retrieval handles request errors."""
+        mock_post.side_effect = httpx.RequestError("Connection failed")
+
+        client = OSVClient()
+        result = client.get_vulnerability_details("OSV-2024-001")
+
+        assert result is None
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_get_details_timeout(self, mock_post: Mock):
+        """Test retrieval respects timeout."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"id": "test"}
+        mock_post.return_value = mock_response
+
+        client = OSVClient(timeout=20)
+        client.get_vulnerability_details("OSV-2024-001")
+
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["timeout"] == 20
+
+
+class TestQueryByEcosystem:
+    """Test suite for query_by_ecosystem method."""
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_query_pypi_ecosystem(self, mock_post: Mock):
+        """Test querying PyPI ecosystem."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": [{"id": "V1"}, {"id": "V2"}]}
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.query_by_ecosystem("PyPI")
+
+        assert len(result) == 2
+        call_args = mock_post.call_args[0][1]
+        assert call_args["ecosystem"] == "PyPI"
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_query_with_pagination(self, mock_post: Mock):
+        """Test querying with pagination."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        client.query_by_ecosystem("PyPI", page=3)
+
+        call_args = mock_post.call_args[0][1]
+        assert call_args["page"] == 3
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_query_request_error(self, mock_post: Mock):
+        """Test query handles request errors."""
+        mock_post.side_effect = httpx.RequestError("Connection failed")
+
+        client = OSVClient()
+        result = client.query_by_ecosystem("PyPI")
+
+        assert result == []
+
+
+class TestEdgeCases:
+    """Test edge cases and error handling."""
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_empty_package_name(self, mock_post: Mock):
+        """Test handling of empty package name."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.check_vulnerability("", "1.0.0")
+
+        assert result == []
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_empty_version(self, mock_post: Mock):
+        """Test handling of empty version string."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.check_vulnerability("requests", "")
+
+        assert result == []
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_special_characters_in_package_name(self, mock_post: Mock):
+        """Test handling of special characters in package name."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"vulns": []}
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.check_vulnerability("package_with_underscores", "1.0.0")
+
+        assert result == []
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_parse_with_missing_optional_fields(self, mock_post: Mock):
+        """Test parsing vulnerability with missing optional fields."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "vulns": [
+                {"id": "OSV-001"}  # Minimal data
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        client = OSVClient()
+        result = client.check_vulnerability("pkg", "1.0")
+
+        assert len(result) == 1
+        assert result[0]["id"] == "OSV-001"
+        assert result[0]["summary"] == ""
+        assert result[0]["details"] == ""
+
+    @patch("pypi_audit.api_clients.osv.httpx.post")
+    def test_parse_references(self, mock_post: Mock):
+        """Test parsing references from OSV response."""
+        data = {
+            "vulns": [
+                {
+                    "id": "OSV-001",
+                    "summary": "Test",
+                    "details": "",
+                    "severity": [],
+                    "references": [
+                        {"url": "https://example.com/1"},
+                        {"url": "https://example.com/2"},
+                        {"url": "https://example.com/3"}
+                    ],
+                    "affected": []
+                }
+            ]
         }
 
-        with patch.object(client, "_make_request") as mock_request:
-            # Mock the direct URL request
-            with patch("urllib.request.urlopen") as mock_urlopen:
-                mock_response = MagicMock()
-                mock_response.read.return_value = json.dumps(mock_details).encode()
-                mock_urlopen.return_value.__enter__.return_value = mock_response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = data
+        mock_post.return_value = mock_response
 
-                result = client.get_vulnerability_details("OSV-2021-1")
+        client = OSVClient()
+        result = client.check_vulnerability("pkg", "1.0")
 
-                assert result == mock_details
-
-    def test_get_vulnerability_details_not_found(self, client: OSVClient) -> None:
-        """Test get_vulnerability_details handles 404."""
-        import urllib.error
-
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_urlopen.side_effect = urllib.error.HTTPError(
-                "", 404, "Not Found", {}, None
-            )
-            result = client.get_vulnerability_details("NONEXISTENT")
-            assert result is None
-
-    def test_list_affected_versions(self, client: OSVClient) -> None:
-        """Test listing affected versions for a vulnerability."""
-        mock_details = {
-            "id": "OSV-2021-1",
-            "affected": [
-                {
-                    "package": {"name": "django", "ecosystem": "PyPI"},
-                    "versions": ["1.0.0", "1.1.0", "1.2.0"],
-                },
-                {
-                    "package": {"name": "django", "ecosystem": "npm"},
-                    "versions": ["2.0.0"],  # Should be ignored
-                },
-            ],
-        }
-
-        with patch.object(client, "get_vulnerability_details", return_value=mock_details):
-            versions = client.list_affected_versions("OSV-2021-1")
-
-            assert "1.0.0" in versions
-            assert "1.1.0" in versions
-            assert "1.2.0" in versions
-            assert "2.0.0" not in versions  # npm ecosystem should be excluded
-
-    def test_list_affected_versions_not_found(self, client: OSVClient) -> None:
-        """Test list_affected_versions handles missing vulnerability."""
-        with patch.object(client, "get_vulnerability_details", return_value=None):
-            versions = client.list_affected_versions("NONEXISTENT")
-            assert versions == []
-
-    def test_vulnerability_with_multiple_fixed_versions(self, client: OSVClient) -> None:
-        """Test handling of multiple fixed versions."""
-        affected = [
-            {
-                "package": {"name": "django", "ecosystem": "PyPI"},
-                "ranges": [
-                    {"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "2.0.0"}]},
-                    {"type": "SEMVER", "events": [{"introduced": "3.0.0"}, {"fixed": "3.2.1"}]},
-                ],
-            }
-        ]
-        fixed_versions = client._extract_fixed_versions(affected)
-
-        assert "2.0.0" in fixed_versions
-        assert "3.2.1" in fixed_versions
-
-    def test_make_request_uses_correct_headers(self, client: OSVClient) -> None:
-        """Test that _make_request sets correct HTTP headers."""
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_response = MagicMock()
-            mock_response.read.return_value = b'{"vulns": []}'
-            mock_response.__enter__ = MagicMock(return_value=mock_response)
-
-            client._make_request("/query", {"test": "data"})
-
-            mock_urlopen.assert_called_once()
-            call_args = mock_urlopen.call_args
-            request = call_args[0][0]
-
-            assert request.headers.get("Content-Type") == "application/json"
-            assert request.headers.get("Accept") == "application/json"
-            assert request.method == "POST"
-
-    def test_severity_parsing_with_float_score(self, client: OSVClient) -> None:
-        """Test severity parsing handles float scores."""
-        # Test numeric as float
-        severity_data = [{"type": "CVSS_V3", "score": 9.8}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.CRITICAL
-
-    def test_severity_parsing_edge_cases(self, client: OSVClient) -> None:
-        """Test severity parsing edge cases."""
-        # Exactly at boundary values
-        severity_data = [{"type": "CVSS_V3", "score": "9.0"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.CRITICAL
-
-        severity_data = [{"type": "CVSS_V3", "score": "7.0"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.HIGH
-
-        severity_data = [{"type": "CVSS_V3", "score": "4.0"}]
-        severity = client._parse_severity_osv(severity_data)
-        assert severity == SeverityLevel.MEDIUM
-
-
-class TestOSVClientIntegration:
-    """Integration tests for OSVClient (requires network)."""
-
-    @pytest.fixture
-    def client(self) -> OSVClient:
-        """Create an OSVClient instance."""
-        return OSVClient(timeout=30)
-
-    def test_query_real_package(self, client: OSVClient) -> None:
-        """Test querying a real package (Django)."""
-        package = Package(name="django", version="1.0.0")
-        vulnerabilities = client.query_package(package)
-
-        # Django 1.0.0 is old and likely has vulnerabilities
-        # At minimum, the request should succeed
-        assert isinstance(vulnerabilities, list)
-        for vuln in vulnerabilities:
-            assert isinstance(vuln, Vulnerability)
-            assert vuln.package_name == "django"
-            assert vuln.id.startswith("OSV-")
-
-    def test_query_nonexistent_package(self, client: OSVClient) -> None:
-        """Test querying a package that doesn't exist."""
-        package = Package(name="this-package-definitely-does-not-exist-xyz", version="1.0.0")
-        vulnerabilities = client.query_package(package)
-
-        assert vulnerabilities == []
+        assert len(result[0]["references"]) == 3
+        assert "https://example.com/1" in result[0]["references"]

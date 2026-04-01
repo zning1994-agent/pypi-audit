@@ -1,109 +1,101 @@
 """PyPI Safety API client for vulnerability data."""
 
+import httpx
 from typing import Any
 
-import httpx
-
-from ..models import Dependency, Severity, Source, Vulnerability
 from .base import BaseAPIClient
 
 
 class PyPISafetyClient(BaseAPIClient):
     """Client for PyPI Safety API."""
 
-    BASE_URL = "https://pypi.org/pypi"
+    BASE_URL = "https://pypi.python.org/pypi"
 
-    def __init__(self, http_client: httpx.Client | None = None) -> None:
-        """Initialize the PyPI Safety API client."""
-        super().__init__(http_client)
-        self._base_url = self.BASE_URL
-
-    def is_available(self) -> bool:
-        """Check if PyPI is available."""
-        try:
-            client = self._http_client or httpx.Client()
-            try:
-                response = client.get(f"{self._base_url}/json", timeout=5.0)
-                return response.status_code == 200
-            finally:
-                if self._owns_client:
-                    client.close()
-        except Exception:
-            return False
-
-    def get_vulnerabilities(self, dependency: Dependency) -> list[Vulnerability]:
-        """
-        Get vulnerabilities for a dependency from PyPI.
-
+    def __init__(self, timeout: int = 30, api_key: str | None = None):
+        """Initialize PyPI Safety client.
+        
         Args:
-            dependency: The dependency to check
+            timeout: Request timeout in seconds.
+            api_key: Optional PyPI Safety API key for premium features.
+        """
+        super().__init__(timeout)
+        self.api_key = api_key
 
+    def check_vulnerability(self, package_name: str, version: str) -> list[dict[str, Any]]:
+        """Check vulnerabilities for a package version via PyPI JSON API.
+        
+        Args:
+            package_name: Name of the package.
+            version: Version string.
+            
         Returns:
-            List of vulnerabilities
+            List of vulnerability records.
         """
         vulnerabilities = []
-
+        
         try:
-            client = self._http_client or httpx.Client()
-            try:
-                # Get package info from PyPI
-                url = f"{self._base_url}/{dependency.name}/{dependency.version}/json"
-                response = client.get(url, timeout=10.0)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    vulnerabilities = self._parse_vulnerabilities(data, dependency)
-            finally:
-                if self._owns_client:
-                    client.close()
+            url = f"{self.BASE_URL}/{package_name}/{version}/json"
+            response = httpx.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                vulnerabilities = self._extract_vulnerabilities(data)
+                
+        except httpx.RequestError:
+            pass
         except Exception:
             pass
-
+            
         return vulnerabilities
 
-    def _parse_vulnerabilities(
-        self, data: dict[str, Any], dependency: Dependency
-    ) -> list[Vulnerability]:
-        """Parse vulnerability data from PyPI response."""
+    def _extract_vulnerabilities(self, package_data: dict) -> list[dict[str, Any]]:
+        """Extract vulnerability information from package data.
+        
+        Args:
+            package_data: Raw package JSON data.
+            
+        Returns:
+            List of vulnerability records.
+        """
         vulnerabilities = []
-
-        # Check for security advisories in package metadata
-        info = data.get("info", {})
-        releases = data.get("releases", {})
-        current_release = releases.get(dependency.version, [{}])[0]
-
-        # Parse vulnerability data from various sources
-        vulns = info.get("vulnerabilities", [])
-
-        for vuln in vulns:
-            for alias in vuln.get("aliases", []):
-                vulnerability = Vulnerability(
-                    id=alias,
-                    package_name=dependency.name,
-                    package_version=dependency.version,
-                    severity=self._parse_severity(vuln.get("severity")),
-                    source=Source.PYPI_SAFETY,
-                    title=vuln.get("title", "Unknown vulnerability"),
-                    description=vuln.get("description"),
-                    advisory_url=vuln.get("link"),
-                    aliases=vuln.get("aliases", []),
-                )
-                vulnerabilities.append(vulnerability)
-
+        
+        info = package_data.get("info", {})
+        for advisory in info.get("vulnerabilities", []):
+            vuln = {
+                "id": advisory.get("id", ""),
+                "package_name": advisory.get("package_name", ""),
+                "advisory": advisory.get("advisory", ""),
+                "漏洞等级": advisory.get(" severity", ""),
+                "advisory_url": advisory.get("advisory_url", ""),
+                "fix_version": advisory.get("fix_version", ""),
+            }
+            vulnerabilities.append(vuln)
+            
         return vulnerabilities
 
-    def _parse_severity(self, severity: str | None) -> Severity:
-        """Parse severity string to Severity enum."""
-        if not severity:
-            return Severity.UNKNOWN
+    def get_vulnerability_details(self, vulnerability_id: str) -> dict[str, Any] | None:
+        """Get details for a specific vulnerability.
+        
+        Args:
+            vulnerability_id: The vulnerability identifier.
+            
+        Returns:
+            Vulnerability details or None.
+        """
+        return None
 
-        severity = severity.lower()
-        if severity in ("critical", "10", "9"):
-            return Severity.CRITICAL
-        elif severity in ("high", "8", "7"):
-            return Severity.HIGH
-        elif severity in ("medium", "moderate", "5", "6"):
-            return Severity.MEDIUM
-        elif severity in ("low", "3", "4"):
-            return Severity.LOW
-        return Severity.UNKNOWN
+    def check_bulk(self, packages: list[tuple[str, str]]) -> dict[str, list[dict[str, Any]]]:
+        """Check multiple packages at once.
+        
+        Args:
+            packages: List of (package_name, version) tuples.
+            
+        Returns:
+            Dictionary mapping package identifiers to vulnerability lists.
+        """
+        results = {}
+        for package_name, version in packages:
+            vulns = self.check_vulnerability(package_name, version)
+            if vulns:
+                results[f"{package_name}=={version}"] = vulns
+        return results
