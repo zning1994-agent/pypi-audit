@@ -5,93 +5,126 @@ from enum import Enum
 from typing import Optional
 
 
-class Severity(Enum):
+class VulnerabilitySeverity(Enum):
     """Vulnerability severity levels."""
-    
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    UNKNOWN = "unknown"
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def from_string(cls, value: str) -> "VulnerabilitySeverity":
+        """Create severity from string value."""
+        value = value.upper()
+        if value in ("CRITICAL", "CRIT"):
+            return cls.CRITICAL
+        elif value == "HIGH":
+            return cls.HIGH
+        elif value in ("MEDIUM", "MODERATE"):
+            return cls.MEDIUM
+        elif value == "LOW":
+            return cls.LOW
+        return cls.UNKNOWN
 
 
 class VulnerabilitySource(Enum):
-    """Source of vulnerability information."""
-    
+    """Source of vulnerability data."""
+
     PYPI_SAFETY = "pypi_safety"
     OSV = "osv"
-    IOC_LITELLM = "ioc_litellm"
+    IOC = "ioc"  # Indicator of Compromise (LiteLLM event)
+
+
+@dataclass
+class Vulnerability:
+    """Represents a vulnerability found in a package."""
+
+    id: str
+    package_name: str
+    package_version: str
+    severity: VulnerabilitySeverity
+    source: VulnerabilitySource
+    title: str
+    description: Optional[str] = None
+    fixed_versions: list[str] = field(default_factory=list)
+    advisory_url: Optional[str] = None
+    cve_id: Optional[str] = None
+
+    def get_severity_score(self) -> int:
+        """Get numeric severity score for sorting."""
+        scores = {
+            VulnerabilitySeverity.CRITICAL: 4,
+            VulnerabilitySeverity.HIGH: 3,
+            VulnerabilitySeverity.MEDIUM: 2,
+            VulnerabilitySeverity.LOW: 1,
+            VulnerabilitySeverity.UNKNOWN: 0,
+        }
+        return scores.get(self.severity, 0)
 
 
 @dataclass
 class Package:
     """Represents a Python package dependency."""
-    
+
     name: str
     version: str
-    file_path: Optional[str] = None
-    
-    def __post_init__(self) -> None:
-        """Normalize package name to lowercase."""
-        self.name = self.name.lower()
-    
+    source_file: str
+    line_number: Optional[int] = None
+
     @property
-    def full_name(self) -> str:
-        """Return package name with version."""
+    def package_id(self) -> str:
+        """Unique identifier for this package."""
         return f"{self.name}=={self.version}"
 
 
 @dataclass
-class Vulnerability:
-    """Represents a known vulnerability."""
-    
-    id: str
+class IocMatch:
+    """Represents a match against known Indicators of Compromise."""
+
     package_name: str
     package_version: str
-    severity: Severity
-    title: str
+    source_file: str
+    ioc_type: str
     description: str
-    source: VulnerabilitySource
-    url: Optional[str] = None
-    fixed_versions: list[str] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)
-    cve_ids: list[str] = field(default_factory=list)
-    
-    def __post_init__(self) -> None:
-        """Normalize package name to lowercase."""
-        self.package_name = self.package_name.lower()
+    event_name: str
+    event_date: str
+    severity: VulnerabilitySeverity = VulnerabilitySeverity.CRITICAL
 
 
 @dataclass
 class ScanResult:
-    """Result of scanning a dependency file."""
-    
-    file_path: str
-    file_type: str
+    """Result of scanning dependencies."""
+
     packages: list[Package] = field(default_factory=list)
     vulnerabilities: list[Vulnerability] = field(default_factory=list)
-    ioc_matches: list["IOCMatch"] = field(default_factory=list)
-    scan_time: float = 0.0
-    error: Optional[str] = None
+    ioc_matches: list[IocMatch] = field(default_factory=list)
+    scan_duration_seconds: float = 0.0
+    files_scanned: list[str] = field(default_factory=list)
+    error_message: Optional[str] = None
 
+    @property
+    def total_vulnerabilities(self) -> int:
+        """Total number of vulnerabilities found."""
+        return len(self.vulnerabilities)
 
-@dataclass
-class IOCMatch:
-    """Match found by IOC detector."""
-    
-    package: Package
-    ioc_data: "LiteLLMIOC"
-    matched_on: str  # e.g., "package_name", "malicious_hash"
-    details: str
+    @property
+    def critical_count(self) -> int:
+        """Count of critical vulnerabilities."""
+        return sum(1 for v in self.vulnerabilities if v.severity == VulnerabilitySeverity.CRITICAL)
 
+    @property
+    def high_count(self) -> int:
+        """Count of high severity vulnerabilities."""
+        return sum(1 for v in self.vulnerabilities if v.severity == VulnerabilitySeverity.HIGH)
 
-@dataclass 
-class LiteLLMIOC:
-    """LiteLLM 2026-03-24 supply chain attack IOC data."""
-    
-    malicious_packages: list[str] = field(default_factory=list)
-    malicious_versions: dict[str, list[str]] = field(default_factory=dict)
-    compromised_hashes: dict[str, list[str]] = field(default_factory=dict)
-    indicators: list[str] = field(default_factory=list)
-    event_date: str = "2026-03-24"
-    description: str = ""
+    @property
+    def has_vulnerabilities(self) -> bool:
+        """Check if any vulnerabilities were found."""
+        return len(self.vulnerabilities) > 0 or len(self.ioc_matches) > 0
+
+    @property
+    def sorted_vulnerabilities(self) -> list[Vulnerability]:
+        """Get vulnerabilities sorted by severity (critical first)."""
+        return sorted(self.vulnerabilities, key=lambda v: v.get_severity_score(), reverse=True)
