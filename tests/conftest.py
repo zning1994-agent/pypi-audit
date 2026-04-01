@@ -1,50 +1,51 @@
-"""Pytest configuration and shared fixtures for pypi-audit tests."""
+"""Pytest configuration and fixtures for pypi-audit tests."""
 
 import pytest
+import sys
+from pathlib import Path
 
-from pypi_audit.models import Package, SeverityLevel
+# Add src to path for imports
+src_path = Path(__file__).parent.parent / "src"
+sys.path.insert(0, str(src_path))
 
 
 @pytest.fixture
-def sample_package() -> Package:
-    """Create a sample Package for testing."""
+def sample_package():
+    """Fixture providing a sample Package object."""
+    from pypi_audit.models import Package
     return Package(name="requests", version="2.28.0")
 
 
 @pytest.fixture
-def vulnerable_package() -> Package:
-    """Create a package known to have vulnerabilities."""
-    return Package(name="django", version="1.0.0")
+def litellm_malicious_package():
+    """Fixture providing a malicious LiteLLM package."""
+    from pypi_audit.models import Package
+    return Package(name="litellm", version="1.0.0")
 
 
 @pytest.fixture
-def severity_levels() -> list[SeverityLevel]:
-    """Return all severity level enum values."""
-    return list(SeverityLevel)
+def litellm_safe_package():
+    """Fixture providing a safe litellm package version."""
+    from pypi_audit.models import Package
+    return Package(name="litellm", version="0.5.0")
 
 
 @pytest.fixture
-def mock_vulnerability_data() -> dict:
-    """Return mock vulnerability data for testing."""
-    return {
-        "id": "OSV-TEST-1",
-        "summary": "Test vulnerability",
-        "details": "This is a test vulnerability for unit testing.",
-        "aliases": ["CVE-2021-12345"],
-        "severity": [{"type": "CVSS_V3", "score": "9.8"}],
-        "affected": [
-            {
-                "package": {"name": "test-package", "ecosystem": "PyPI"},
-                "ranges": [
-                    {
-                        "type": "SEMVER",
-                        "events": [{"introduced": "0"}, {"fixed": "1.0.0"}],
-                    }
-                ],
-                "versions": ["0.1.0", "0.2.0", "0.9.0"],
-            }
+def ioc_detector():
+    """Fixture providing an IOCDetector instance."""
+    from pypi_audit.ioc.detector import IOCDetector
+    return IOCDetector()
+
+
+@pytest.fixture
+def sample_scan_result():
+    """Fixture providing a sample ScanResult."""
+    from pypi_audit.models import Package, ScanResult
+    return ScanResult(
+        file_path="requirements.txt",
+        file_type="requirements",
+        packages=[
+            Package(name="requests", version="2.28.0"),
+            Package(name="numpy", version="1.24.0"),
         ],
-        "references": [
-            {"type": "ADVISORY", "url": "https://example.com/advisory"},
-        ],
-    }
+    )
