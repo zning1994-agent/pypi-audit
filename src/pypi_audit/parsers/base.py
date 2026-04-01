@@ -1,48 +1,41 @@
-"""Base class for dependency file parsers."""
+"""Base parser class for dependency files."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
-
-@dataclass
-class Dependency:
-    """Represents a single dependency package."""
-    
-    name: str
-    version: str | None = None
-    extras: list[str] | None = None
-    marker: str | None = None
-    source_file: Path | None = None
-    
-    def __post_init__(self) -> None:
-        """Normalize package name to lowercase."""
-        self.name = self.name.lower().replace("_", "-")
+from ..models import Dependency
 
 
 class BaseParser(ABC):
     """Abstract base class for dependency file parsers."""
     
-    @property
     @abstractmethod
-    def supported_extensions(self) -> tuple[str, ...]:
-        """Return supported file extensions."""
+    def parse(self, file_path: str) -> list[Dependency]:
+        """
+        Parse a dependency file and return list of dependencies.
+        
+        Args:
+            file_path: Path to the dependency file
+            
+        Returns:
+            List of Dependency objects
+        """
         pass
     
-    @abstractmethod
-    def parse(self, file_path: Path) -> Iterator[Dependency]:
-        """Parse a dependency file and yield Dependency objects."""
-        pass
+    def _read_file(self, file_path: str) -> str:
+        """Read file content safely."""
+        path = Path(file_path)
+        return path.read_text(encoding="utf-8")
     
-    @abstractmethod
-    def parse_string(self, content: str) -> Iterator[Dependency]:
-        """Parse dependency content from a string."""
-        pass
-    
-    @staticmethod
-    def _normalize_version(version: str) -> str:
-        """Normalize version string by removing leading 'v'."""
-        if version.startswith("v"):
-            return version[1:]
-        return version
+    def _create_dependency(
+        self,
+        name: str,
+        version: str,
+        source_file: str | None = None,
+    ) -> Dependency:
+        """Create a Dependency object with normalization."""
+        return Dependency(
+            name=name.strip().lower(),
+            version=version.strip(),
+            source_file=source_file,
+        )

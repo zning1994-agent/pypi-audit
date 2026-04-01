@@ -1,151 +1,234 @@
-"""
-pypi-audit Scanner Module.
+"""Core scanning engine for pypi-audit."""
 
-Core scanning engine that orchestrates dependency parsing,
-vulnerability checking, and result aggregation.
-"""
-
-from __future__ import annotations
-
-from datetime import datetime
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Optional
 
-from pypi_audit.models import ScanResult, ScanOptions, Package, Vulnerability
-from pypi_audit.parsers import RequirementsParser, PyProjectParser, PipfileParser
-from pypi_audit.api_clients import PyPISafetyClient, OSVClient
-from pypi_audit.ioc import LiteLLMDetector
-
-if TYPE_CHECKING:
-    from pypi_audit.models import DataSource
+from .models import (
+    Dependency,
+    ScanResult,
+    SeverityLevel,
+    Vulnerability,
+    VulnerabilityFinding,
+    VulnerabilitySource,
+)
+from .parsers import get_parser
+from .api_clients import PyPISafetyClient, OSVClient
+from .ioc.detector import IOCDetector
 
 
 class Scanner:
-    """Main scanner class for vulnerability detection."""
+    """Core scanning engine for Python dependencies."""
     
     def __init__(
         self,
-        timeout: int = 30,
-        verbosity: int = 0,
-        check_pypi_safety: bool = True,
-        check_osv: bool = True,
-        check_litellm: bool = True,
-    ) -> None:
+        use_pypi_safety: bool = True,
+        use_osv: bool = True,
+        use_ioc: bool = True,
+        api_timeout: int = 30,
+    ):
         """
         Initialize the scanner.
         
         Args:
-            timeout: HTTP request timeout in seconds.
-            verbosity: Verbosity level (0=silent, 1=normal, 2+=verbose).
-            check_pypi_safety: Enable PyPI Safety API checks.
-            check_osv: Enable OSV.dev API checks.
-            check_litellm: Enable LiteLLM IOC checks.
+            use_pypi_safety: Enable PyPI Safety API checks
+            use_osv: Enable OSV.dev API checks
+            use_ioc: Enable IOC detector checks
+            api_timeout: Timeout for API requests in seconds
         """
-        self.timeout = timeout
-        self.verbosity = verbosity
-        self.check_pypi_safety = check_pypi_safety
-        self.check_osv = check_osv
-        self.check_litellm = check_litellm
+        self.use_pypi_safety = use_pypi_safety
+        self.use_osv = use_osv
+        self.use_ioc = use_ioc
+        self.api_timeout = api_timeout
         
-        # Initialize API clients
-        self._pypi_safety_client = PyPISafetyClient(timeout=timeout) if check_pypi_safety else None
-        self._osv_client = OSVClient(timeout=timeout) if check_osv else None
-        self._litellm_detector = LiteLLMDetector() if check_litellm else None
-        
-        # Initialize parsers
-        self._parsers = [
-            RequirementsParser(),
-            PyProjectParser(),
-            PipfileParser(),
-        ]
+        self._pypi_client: Optional[PyPISafetyClient] = None
+        self._osv_client: Optional[OSVClient] = None
+        self._ioc_detector: Optional[IOCDetector] = None
     
-    def scan(self, path: Path) -> ScanResult:
+    @property
+    def pypi_client(self) -> PyPISafetyClient:
+        """Get or create PyPI Safety API client."""
+        if self._pypi_client is None:
+            self._pypi_client = PyPISafetyClient(timeout=self.api_timeout)
+        return self._pypi_client
+    
+    @property
+    def osv_client(self) -> OSVClient:
+        """Get or create OSV.dev API client."""
+        if self._osv_client is None:
+            self._osv_client = OSVClient(timeout=self.api_timeout)
+        return self._osv_client
+    
+    @property
+    def ioc_detector(self) -> IOCDetector:
+        """Get or create IOC detector."""
+        if self._ioc_detector is None:
+            self._ioc_detector = IOCDetector()
+        return self._ioc_detector
+    
+    def scan_file(self, file_path: str) -> ScanResult:
         """
-        Scan a file or directory for vulnerabilities.
+        Scan a single dependency file.
         
         Args:
-            path: Path to a dependency file or directory.
+            file_path: Path to the dependency file
             
         Returns:
-            ScanResult containing all found vulnerabilities.
+            ScanResult with found dependencies and vulnerabilities
         """
-        path = path.resolve()
+        path = Path(file_path)
         
-        # Find dependency files
-        dep_files = self._find_dependency_files(path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
         
-        if not dep_files:
-            return ScanResult(
-                path=path,
-                vulnerabilities=[],
-                scanned_at=datetime.now(),
-                total_packages=0,
-                error_message="No supported dependency files found",
-            )
+        parser_class = get_parser(file_path)
+        if parser_class is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
         
-        # Parse all dependency files
-        all_packages: list[Package] = []
-        for dep_file in dep_files:
-            packages = self._parse_file(dep_file)
-            all_packages.extend(packages)
+        parser = parser_class()
+        dependencies = parser.parse(file_path)
         
-        # Check for vulnerabilities
-        vulnerabilities = self._check_vulnerabilities(all_packages)
+        return self._scan_dependencies(dependencies, [str(path)])
+    
+    def scan_directory(self, directory: str) -> ScanResult:
+        """
+        Scan all dependency files in a directory.
+        
+        Args:
+            directory: Path to directory to scan
+            
+        Returns:
+            Combined ScanResult for all found dependency files
+        """
+        dir_path = Path(directory)
+        
+        if not dir_path.exists():
+            raise NotADirectoryError(f"Directory not found: {directory}")
+        
+        all_dependencies: list[Dependency] = []
+        all_findings: list[VulnerabilityFinding] = []
+        files_scanned: list[str] = []
+        
+        dependency_files = [
+            ("requirements.txt", "requirements.txt"),
+            ("pyproject.toml", "pyproject.toml"),
+            ("Pipfile.lock", "Pipfile.lock"),
+        ]
+        
+        for filename, file_id in dependency_files:
+            file_path = dir_path / filename
+            if file_path.exists():
+                try:
+                    parser_class = get_parser(str(file_path))
+                    if parser_class:
+                        parser = parser_class()
+                        deps = parser.parse(str(file_path))
+                        all_dependencies.extend(deps)
+                        files_scanned.append(str(file_path))
+                except Exception:
+                    continue
+        
+        return self._scan_dependencies(all_dependencies, files_scanned)
+    
+    def _scan_dependencies(
+        self,
+        dependencies: list[Dependency],
+        files_scanned: list[str],
+    ) -> ScanResult:
+        """
+        Scan a list of dependencies for vulnerabilities.
+        
+        Args:
+            dependencies: List of dependencies to scan
+            files_scanned: List of source files scanned
+            
+        Returns:
+            ScanResult with all findings
+        """
+        start_time = time.time()
+        findings: list[VulnerabilityFinding] = []
+        
+        for dep in dependencies:
+            dep_findings = self._check_dependency(dep)
+            findings.extend(dep_findings)
+        
+        scan_time = time.time() - start_time
         
         return ScanResult(
-            path=path,
-            vulnerabilities=vulnerabilities,
-            scanned_at=datetime.now(),
-            total_packages=len(all_packages),
+            dependencies=dependencies,
+            vulnerabilities=findings,
+            scan_time=scan_time,
+            files_scanned=files_scanned,
         )
     
-    def _find_dependency_files(self, path: Path) -> list[Path]:
-        """Find all supported dependency files in the given path."""
-        files = []
+    def _check_dependency(self, dep: Dependency) -> list[VulnerabilityFinding]:
+        """
+        Check a single dependency for vulnerabilities.
         
-        if path.is_file():
-            if self._is_supported_dep_file(path):
-                files.append(path)
-        else:
-            for pattern in ["**/requirements*.txt", "**/pyproject.toml", "**/Pipfile.lock"]:
-                files.extend(path.glob(pattern))
-        
-        return files
-    
-    def _is_supported_dep_file(self, path: Path) -> bool:
-        """Check if the file is a supported dependency file."""
-        name = path.name.lower()
-        return (
-            name.startswith("requirements") or
-            name == "pyproject.toml" or
-            name == "pipfile.lock"
-        )
-    
-    def _parse_file(self, path: Path) -> list[Package]:
-        """Parse a dependency file using the appropriate parser."""
-        for parser in self._parsers:
-            if parser.supports(path):
-                return parser.parse(path)
-        return []
-    
-    def _check_vulnerabilities(self, packages: list[Package]) -> list[Vulnerability]:
-        """Check all packages against vulnerability databases."""
-        vulnerabilities = []
-        
-        for package in packages:
-            # Check PyPI Safety
-            if self.check_pypi_safety and self._pypi_safety_client:
-                vulns = self._pypi_safety_client.check_package(package.name, package.version)
-                vulnerabilities.extend(vulns)
+        Args:
+            dep: Dependency to check
             
-            # Check OSV
-            if self.check_osv and self._osv_client:
-                vulns = self._osv_client.check_package(package.name, package.version)
-                vulnerabilities.extend(vulns)
-            
-            # Check LiteLLM IOC
-            if self.check_litellm and self._litellm_detector:
-                vulns = self._litellm_detector.check_package(package.name, package.version)
-                vulnerabilities.extend(vulns)
+        Returns:
+            List of vulnerability findings
+        """
+        findings: list[VulnerabilityFinding] = []
         
-        return vulnerabilities
+        # Check PyPI Safety API
+        if self.use_pypi_safety:
+            try:
+                vulns = self.pypi_client.check_package(dep.name, dep.version)
+                for vuln in vulns:
+                    findings.append(VulnerabilityFinding(
+                        dependency=dep,
+                        vulnerability=vuln,
+                    ))
+            except Exception:
+                pass
+        
+        # Check OSV.dev API
+        if self.use_osv:
+            try:
+                vulns = self.osv_client.check_package(dep.name, dep.version)
+                for vuln in vulns:
+                    findings.append(VulnerabilityFinding(
+                        dependency=dep,
+                        vulnerability=vuln,
+                    ))
+            except Exception:
+                pass
+        
+        # Check IOC detector
+        if self.use_ioc:
+            try:
+                ioc_matches = self.ioc_detector.check_package(dep.name, dep.version)
+                for ioc_match in ioc_matches:
+                    findings.append(VulnerabilityFinding(
+                        dependency=dep,
+                        vulnerability=ioc_match,
+                        is_ioc_match=True,
+                        ioc_details=ioc_match.description,
+                    ))
+            except Exception:
+                pass
+        
+        return findings
+    
+    def get_summary(self, result: ScanResult) -> dict:
+        """
+        Generate a summary of scan results.
+        
+        Args:
+            result: ScanResult to summarize
+            
+        Returns:
+            Dictionary with summary statistics
+        """
+        return {
+            "total_dependencies": result.total_dependencies,
+            "vulnerable_dependencies": result.vulnerable_dependencies,
+            "total_vulnerabilities": len(result.vulnerabilities),
+            "critical_count": result.critical_count,
+            "ioc_matches": result.ioc_matches,
+            "scan_time": f"{result.scan_time:.2f}s",
+            "files_scanned": len(result.files_scanned),
+        }

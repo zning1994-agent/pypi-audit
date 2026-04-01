@@ -1,6 +1,5 @@
-"""IOC (Indicator of Compromise) detection modules."""
+"""IOC detection module."""
 
 from .detector import IOCDetector
-from .litellm_2026 import LiteLLM2026IOC
 
-__all__ = ["IOCDetector", "LiteLLM2026IOC"]
+__all__ = ["IOCDetector"]

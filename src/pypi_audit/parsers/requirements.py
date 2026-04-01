@@ -1,97 +1,71 @@
-"""Parser for requirements.txt files."""
+"""Requirements.txt parser."""
 
 import re
-from pathlib import Path
-from typing import Iterator
+from typing import Optional
 
-from .base import BaseParser, Dependency
+from .base import BaseParser
+from ..models import Dependency
 
 
 class RequirementsParser(BaseParser):
-    """Parser for requirements.txt dependency files."""
+    """Parser for requirements.txt files."""
     
-    # Pattern to match package specifications
-    # Supports: package, package==version, package>=version, package[extra], etc.
-    PACKAGE_PATTERN = re.compile(
-        r"^(?P<name>[a-zA-Z0-9][-a-zA-Z0-9._]*)"
-        r"(?:\[(?P<extras>[^\]]+)\])?"
-        r"(?P<version_spec>[^;#\s]*)"
-        r"(?:\s*#.*)?$"
+    # Regex patterns for requirements.txt formats
+    PATTERN_STANDARD = re.compile(
+        r'^([a-zA-Z0-9][-a-zA-Z0-9._]*)'  # Package name
+        r'(?:\[([^\]]+)\])?'               # Optional extras
+        r'(?:(==|>=|<=|~=|!=|>|<)([^;,\s]+))?'  # Version specifier
     )
     
-    # Pattern to match environment markers
-    MARKER_PATTERN = re.compile(r";\s*(?P<marker>.+)$")
-    
-    @property
-    def supported_extensions(self) -> tuple[str, ...]:
-        return (".txt",)
-    
-    def parse(self, file_path: Path) -> Iterator[Dependency]:
-        """Parse a requirements.txt file."""
-        content = file_path.read_text(encoding="utf-8")
-        for dep in self.parse_string(content):
-            dep.source_file = file_path
-            yield dep
-    
-    def parse_string(self, content: str) -> Iterator[Dependency]:
-        """Parse requirements from string content."""
-        for line_num, line in enumerate(content.splitlines(), 1):
+    def parse(self, file_path: str) -> list[Dependency]:
+        """
+        Parse requirements.txt file.
+        
+        Args:
+            file_path: Path to requirements.txt
+            
+        Returns:
+            List of Dependency objects
+        """
+        content = self._read_file(file_path)
+        dependencies: list[Dependency] = []
+        
+        for line in content.splitlines():
             line = line.strip()
             
             # Skip empty lines and comments
             if not line or line.startswith("#"):
                 continue
             
-            # Handle -r include directives
-            if line.startswith("-r ") or line.startswith("--requirement="):
-                continue
-            
-            # Handle -e editable installs
-            if line.startswith("-e ") or line.startswith("--editable "):
-                continue
-            
-            # Handle options like --index-url, -f, etc.
+            # Skip options like -r, -e, --index-url, etc.
             if line.startswith("-"):
                 continue
             
-            # Parse the package line
+            # Parse the requirement
             dep = self._parse_line(line)
             if dep:
-                yield dep
+                dependencies.append(dep)
+        
+        return dependencies
     
-    def _parse_line(self, line: str) -> Dependency | None:
-        """Parse a single requirements line."""
-        # Remove inline comments
-        line = line.split("#")[0].strip()
-        if not line or line.startswith("-"):
-            return None
+    def _parse_line(self, line: str) -> Optional[Dependency]:
+        """Parse a single requirement line."""
+        # Handle comments after requirement
+        if "#" in line:
+            line = line.split("#")[0].strip()
         
-        # Extract marker if present
-        marker = None
-        marker_match = self.MARKER_PATTERN.search(line)
-        if marker_match:
-            marker = marker_match.group("marker").strip()
-            line = self.MARKER_PATTERN.sub("", line).strip()
+        match = self.PATTERN_STANDARD.match(line)
+        if match:
+            name = match.group(1)
+            version_op = match.group(3)
+            version = match.group(4) or "*"
+            
+            return self._create_dependency(name, version)
         
-        # Parse package specification
-        match = self.PACKAGE_PATTERN.match(line)
-        if not match:
-            return None
+        # Try to parse as simple package==version format
+        if "==" in line:
+            parts = line.split("==")
+            if len(parts) == 2:
+                return self._create_dependency(parts[0].strip(), parts[1].strip())
         
-        name = match.group("name")
-        extras = None
-        if match.group("extras"):
-            extras = [e.strip() for e in match.group("extras").split(",")]
-        
-        version_spec = match.group("version_spec") or None
-        
-        # Normalize version spec (remove leading 'v' if present)
-        if version_spec:
-            version_spec = self._normalize_version(version_spec)
-        
-        return Dependency(
-            name=name,
-            version=version_spec,
-            extras=extras,
-            marker=marker,
-        )
+        return None

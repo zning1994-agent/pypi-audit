@@ -1,101 +1,91 @@
-"""PyPI Safety API client for vulnerability data."""
+"""PyPI Safety API client."""
 
 import httpx
-from typing import Any
+from typing import Optional
 
-from .base import BaseAPIClient
+from ..models import SeverityLevel, Vulnerability, VulnerabilitySource
 
 
-class PyPISafetyClient(BaseAPIClient):
+class PyPISafetyClient:
     """Client for PyPI Safety API."""
-
-    BASE_URL = "https://pypi.python.org/pypi"
-
-    def __init__(self, timeout: int = 30, api_key: str | None = None):
-        """Initialize PyPI Safety client.
-        
-        Args:
-            timeout: Request timeout in seconds.
-            api_key: Optional PyPI Safety API key for premium features.
+    
+    BASE_URL = "https://pypi.org/pypi"
+    
+    def __init__(self, timeout: int = 30):
         """
-        super().__init__(timeout)
-        self.api_key = api_key
-
-    def check_vulnerability(self, package_name: str, version: str) -> list[dict[str, Any]]:
-        """Check vulnerabilities for a package version via PyPI JSON API.
+        Initialize PyPI Safety API client.
         
         Args:
-            package_name: Name of the package.
-            version: Version string.
+            timeout: Request timeout in seconds
+        """
+        self.timeout = timeout
+        self._client: Optional[httpx.Client] = None
+    
+    @property
+    def client(self) -> httpx.Client:
+        """Get or create HTTP client."""
+        if self._client is None:
+            self._client = httpx.Client(timeout=self.timeout)
+        return self._client
+    
+    def check_package(self, package_name: str, version: str) -> list[Vulnerability]:
+        """
+        Check a package version against PyPI Safety database.
+        
+        Args:
+            package_name: Name of the package
+            version: Version to check
             
         Returns:
-            List of vulnerability records.
+            List of vulnerabilities found
         """
-        vulnerabilities = []
-        
         try:
             url = f"{self.BASE_URL}/{package_name}/{version}/json"
-            response = httpx.get(url, timeout=self.timeout)
+            response = self.client.get(url)
             
-            if response.status_code == 200:
-                data = response.json()
-                vulnerabilities = self._extract_vulnerabilities(data)
-                
-        except httpx.RequestError:
-            pass
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            vulnerabilities: list[Vulnerability] = []
+            
+            # Extract vulnerabilities from JSON response
+            if "vulnerabilities" in data:
+                for vuln_data in data["vulnerabilities"]:
+                    vulnerabilities.append(
+                        Vulnerability(
+                            id=vuln_data.get("id", f"PYPI-{package_name}-{version}"),
+                            package_name=package_name,
+                            affected_versions=version,
+                            severity=self._parse_severity(vuln_data.get("severity")),
+                            source=VulnerabilitySource.PYPI_SAFETY,
+                            description=vuln_data.get("description", ""),
+                            advisory_url=vuln_data.get("link", ""),
+                            fixed_versions=vuln_data.get("fix_versions", []),
+                        )
+                    )
+            
+            return vulnerabilities
+            
         except Exception:
-            pass
-            
-        return vulnerabilities
-
-    def _extract_vulnerabilities(self, package_data: dict) -> list[dict[str, Any]]:
-        """Extract vulnerability information from package data.
+            return []
+    
+    def _parse_severity(self, severity: Optional[str]) -> SeverityLevel:
+        """Parse severity string to SeverityLevel enum."""
+        if severity is None:
+            return SeverityLevel.UNKNOWN
         
-        Args:
-            package_data: Raw package JSON data.
-            
-        Returns:
-            List of vulnerability records.
-        """
-        vulnerabilities = []
+        severity_map = {
+            "critical": SeverityLevel.CRITICAL,
+            "high": SeverityLevel.HIGH,
+            "medium": SeverityLevel.MEDIUM,
+            "low": SeverityLevel.LOW,
+        }
         
-        info = package_data.get("info", {})
-        for advisory in info.get("vulnerabilities", []):
-            vuln = {
-                "id": advisory.get("id", ""),
-                "package_name": advisory.get("package_name", ""),
-                "advisory": advisory.get("advisory", ""),
-                "漏洞等级": advisory.get(" severity", ""),
-                "advisory_url": advisory.get("advisory_url", ""),
-                "fix_version": advisory.get("fix_version", ""),
-            }
-            vulnerabilities.append(vuln)
-            
-        return vulnerabilities
-
-    def get_vulnerability_details(self, vulnerability_id: str) -> dict[str, Any] | None:
-        """Get details for a specific vulnerability.
-        
-        Args:
-            vulnerability_id: The vulnerability identifier.
-            
-        Returns:
-            Vulnerability details or None.
-        """
-        return None
-
-    def check_bulk(self, packages: list[tuple[str, str]]) -> dict[str, list[dict[str, Any]]]:
-        """Check multiple packages at once.
-        
-        Args:
-            packages: List of (package_name, version) tuples.
-            
-        Returns:
-            Dictionary mapping package identifiers to vulnerability lists.
-        """
-        results = {}
-        for package_name, version in packages:
-            vulns = self.check_vulnerability(package_name, version)
-            if vulns:
-                results[f"{package_name}=={version}"] = vulns
-        return results
+        return severity_map.get(severity.lower(), SeverityLevel.UNKNOWN)
+    
+    def close(self) -> None:
+        """Close the HTTP client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None

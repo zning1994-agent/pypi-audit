@@ -1,73 +1,66 @@
-"""Parser for Pipfile.lock files."""
+"""Pipfile.lock parser."""
 
 import sys
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from .base import BaseParser, Dependency
+from .base import BaseParser
+from ..models import Dependency
+
+# Handle Python version for tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 
 class PipfileParser(BaseParser):
-    """Parser for Pipfile.lock dependency files."""
+    """Parser for Pipfile.lock files."""
     
-    @property
-    def supported_extensions(self) -> tuple[str, ...]:
-        return (".lock", ".json")
-    
-    def parse(self, file_path: Path) -> Iterator[Dependency]:
-        """Parse a Pipfile.lock file."""
-        content = file_path.read_text(encoding="utf-8")
-        for dep in self.parse_string(content):
-            dep.source_file = file_path
-            yield dep
-    
-    def parse_string(self, content: str) -> Iterator[Dependency]:
-        """Parse dependencies from Pipfile.lock content."""
-        import json
+    def parse(self, file_path: str) -> list[Dependency]:
+        """
+        Parse Pipfile.lock file.
+        
+        Args:
+            file_path: Path to Pipfile.lock
+            
+        Returns:
+            List of Dependency objects
+        """
+        content = self._read_file(file_path)
+        dependencies: list[Dependency] = []
         
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            return
+            data = tomllib.loads(content)
+        except Exception:
+            return []
         
-        # Parse default dependencies
+        # Get the default dependencies section
         default_deps = data.get("default", {})
-        yield from self._parse_pipfile_deps(default_deps)
         
-        # Parse develop dependencies
-        develop_deps = data.get("develop", {})
-        yield from self._parse_pipfile_deps(develop_deps)
-    
-    def _parse_pipfile_deps(self, deps: dict[str, Any]) -> Iterator[Dependency]:
-        """Parse Pipfile dependency dictionary."""
-        for name, spec in deps.items():
-            if not isinstance(spec, dict):
+        for name, dep_data in default_deps.items():
+            if not isinstance(dep_data, dict):
                 continue
             
-            # Get version from the spec
-            version = spec.get("version", "")
-            
-            # Normalize version (remove leading 'v' and extract version number)
+            version = self._extract_version(dep_data)
+            if version:
+                dependencies.append(
+                    self._create_dependency(name, version, file_path)
+                )
+        
+        return dependencies
+    
+    def _extract_version(self, dep_data: dict[str, Any]) -> str:
+        """Extract version from Pipfile.lock dependency data."""
+        # Check for version key
+        if "version" in dep_data:
+            version = dep_data["version"]
+            # Remove leading '==' or other operators
             if isinstance(version, str):
-                if version.startswith("=="):
-                    version = version[2:]
-                elif version.startswith("v"):
-                    version = version[1:]
-                else:
-                    # Try to extract version from markers like {"version": "*", "markers": "..."}
-                    version = None
-            
-            # Get hash for verification
-            hashes = spec.get("hashes", [])
-            if hashes and not version:
-                # If no version but has hashes, mark as pinned
-                version = "pinned"
-            
-            # Get optional/extras
-            extras = spec.get("extras", [])
-            
-            yield Dependency(
-                name=name,
-                version=self._normalize_version(version) if version else None,
-                extras=extras if extras else None,
-            )
+                version = version.lstrip("=<>~!")
+                return version
+        
+        # Check for hashes (sometimes version is implicit)
+        if "version" not in dep_data and "hashes" in dep_data:
+            return "*"
+        
+        return "*"

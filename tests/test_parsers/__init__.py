@@ -1,1 +1,1 @@
-"""Tests for pypi_audit.parsers module."""
+"""Tests for dependency file parsers."""

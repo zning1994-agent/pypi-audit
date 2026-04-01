@@ -1,169 +1,118 @@
-"""OSV.dev API client for open source vulnerability data."""
+"""OSV.dev API client."""
 
 import httpx
-from typing import Any
+from typing import Optional
 
-from .base import BaseAPIClient
+from ..models import SeverityLevel, Vulnerability, VulnerabilitySource
 
 
-class OSVClient(BaseAPIClient):
+class OSVClient:
     """Client for OSV.dev API."""
-
+    
     BASE_URL = "https://api.osv.dev/v1"
-
-    def check_vulnerability(self, package_name: str, version: str) -> list[dict[str, Any]]:
-        """Query OSV for vulnerabilities affecting a package version.
+    
+    def __init__(self, timeout: int = 30):
+        """
+        Initialize OSV.dev API client.
         
         Args:
-            package_name: Name of the package.
-            version: Version string.
+            timeout: Request timeout in seconds
+        """
+        self.timeout = timeout
+        self._client: Optional[httpx.Client] = None
+    
+    @property
+    def client(self) -> httpx.Client:
+        """Get or create HTTP client."""
+        if self._client is None:
+            self._client = httpx.Client(timeout=self.timeout)
+        return self._client
+    
+    def check_package(self, package_name: str, version: str) -> list[Vulnerability]:
+        """
+        Check a package version against OSV database.
+        
+        Args:
+            package_name: Name of the package
+            version: Version to check
             
         Returns:
-            List of vulnerability records from OSV.
+            List of vulnerabilities found
         """
-        vulnerabilities = []
-        
         try:
-            response = httpx.post(
+            # Query OSV for PyPI package vulnerabilities
+            response = self.client.post(
                 f"{self.BASE_URL}/query",
                 json={
                     "package": {
                         "name": package_name,
-                        "ecosystem": "PyPI"
+                        "ecosystem": "PyPI",
                     },
-                    "version": version
+                    "version": version,
                 },
-                timeout=self.timeout
             )
             
-            if response.status_code == 200:
-                data = response.json()
-                vulnerabilities = self._parse_osv_response(data, package_name, version)
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            vulnerabilities: list[Vulnerability] = []
+            
+            # Parse OSV response format
+            for vulns in data.get("vulns", []):
+                severity = self._extract_severity(vulns)
                 
-        except httpx.RequestError:
-            pass
+                vulnerabilities.append(
+                    Vulnerability(
+                        id=vulns.get("id", f"OSV-{package_name}-{version}"),
+                        package_name=package_name,
+                        affected_versions=self._extract_affected(vulns),
+                        severity=severity,
+                        source=VulnerabilitySource.OSV,
+                        description=vulns.get("summary", ""),
+                        advisory_url=vulns.get("external_links", [{}])[0].get("url", ""),
+                    )
+                )
+            
+            return vulnerabilities
+            
         except Exception:
-            pass
-            
-        return vulnerabilities
-
-    def _parse_osv_response(self, data: dict, package_name: str, version: str) -> list[dict[str, Any]]:
-        """Parse OSV API response into vulnerability records.
+            return []
+    
+    def _extract_severity(self, vuln_data: dict) -> SeverityLevel:
+        """Extract severity from OSV vulnerability data."""
+        severity = SeverityLevel.UNKNOWN
         
-        Args:
-            data: Raw OSV API response.
-            package_name: Package name for context.
-            version: Version for context.
-            
-        Returns:
-            List of normalized vulnerability records.
-        """
-        vulnerabilities = []
-        
-        for vuln in data.get("vulns", []):
-            record = {
-                "id": vuln.get("id", ""),
-                "summary": vuln.get("summary", ""),
-                "details": vuln.get("details", ""),
-                "severity": self._extract_severity(vuln),
-                "references": [ref.get("url", "") for ref in vuln.get("references", [])],
-                "affected": self._format_affected(vuln.get("affected", [])),
-            }
-            vulnerabilities.append(record)
-            
-        return vulnerabilities
-
-    def _extract_severity(self, vuln: dict) -> str:
-        """Extract severity information from vulnerability.
-        
-        Args:
-            vuln: OSV vulnerability data.
-            
-        Returns:
-            Severity string.
-        """
-        severity = "UNKNOWN"
-        
-        for severity_info in vuln.get("severity", []):
-            if severity_info.get("type") == "CVSS_V3":
-                score = severity_info.get("score", "N/A")
-                severity = f"CVSS_V3:{score}"
+        # Check for CVSS score
+        severity_list = vuln_data.get("severity", [])
+        for sev in severity_list:
+            if "score" in sev:
+                score = float(sev["score"])
+                if score >= 9.0:
+                    severity = SeverityLevel.CRITICAL
+                elif score >= 7.0:
+                    severity = SeverityLevel.HIGH
+                elif score >= 4.0:
+                    severity = SeverityLevel.MEDIUM
+                else:
+                    severity = SeverityLevel.LOW
                 break
-                
+        
         return severity
-
-    def _format_affected(self, affected: list) -> str:
-        """Format affected versions information.
+    
+    def _extract_affected(self, vuln_data: dict) -> str:
+        """Extract affected versions string from OSV data."""
+        affected = vuln_data.get("affected", [])
+        if affected:
+            ranges = affected[0].get("ranges", [{}])[0]
+            events = ranges.get("events", [])
+            if events:
+                return " ".join(f"{e.get('introduced', e.get('fixed', '?'))}" for e in events)
         
-        Args:
-            affected: List of affected package versions.
-            
-        Returns:
-            Formatted string of affected versions.
-        """
-        if not affected:
-            return "Unknown"
-            
-        ranges = []
-        for entry in affected:
-            package = entry.get("package", {}).get("name", "")
-            if package:
-                ranges.append(package)
-                
-        return ", ".join(ranges) if ranges else "Unknown"
-
-    def get_vulnerability_details(self, vulnerability_id: str) -> dict[str, Any] | None:
-        """Get detailed information about a specific vulnerability.
-        
-        Args:
-            vulnerability_id: The OSV vulnerability ID.
-            
-        Returns:
-            Full vulnerability details or None.
-        """
-        try:
-            response = httpx.post(
-                f"{self.BASE_URL}/vulns/{vulnerability_id}",
-                timeout=self.timeout
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-                
-        except httpx.RequestError:
-            pass
-        except Exception:
-            pass
-            
-        return None
-
-    def query_by_ecosystem(self, ecosystem: str, page: int = 1) -> list[dict[str, Any]]:
-        """Query vulnerabilities by ecosystem.
-        
-        Args:
-            ecosystem: Package ecosystem (e.g., "PyPI").
-            page: Page number for pagination.
-            
-        Returns:
-            List of vulnerability summaries.
-        """
-        try:
-            response = httpx.post(
-                f"{self.BASE_URL}/query",
-                json={
-                    "page": page,
-                    "ecosystem": ecosystem
-                },
-                timeout=self.timeout
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("vulns", [])
-                
-        except httpx.RequestError:
-            pass
-        except Exception:
-            pass
-            
-        return []
+        return "*"
+    
+    def close(self) -> None:
+        """Close the HTTP client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
