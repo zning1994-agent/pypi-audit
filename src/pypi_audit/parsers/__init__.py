@@ -1,14 +1,6 @@
-"""Dependency file parsers for pypi-audit."""
+"""Package parsers for different dependency file formats."""
 
-from pypi_audit.parsers.base import BaseParser, ParseResult
-from pypi_audit.parsers.requirements import RequirementsParser
-from pypi_audit.parsers.pyproject import PyprojectParser
-from pypi_audit.parsers.pipfile import PipfileParser
+from .base import BaseParser
+from .pyproject import PyprojectParser
 
-__all__ = [
-    "BaseParser",
-    "ParseResult",
-    "RequirementsParser",
-    "PyprojectParser",
-    "PipfileParser",
-]
+__all__ = ["BaseParser", "PyprojectParser"]

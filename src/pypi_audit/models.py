@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Optional
 
 
-class Severity(str, Enum):
-    """Vulnerability severity levels."""
+class Severity(Enum):
+    """Vulnerability severity level."""
 
     CRITICAL = "critical"
     HIGH = "high"
@@ -15,55 +15,86 @@ class Severity(str, Enum):
     UNKNOWN = "unknown"
 
 
+class Source(Enum):
+    """Vulnerability data source."""
+
+    PYPI_SAFETY = "pypi_safety"
+    OSV = "osv"
+    IOC_LITELLM = "ioc_litellm"
+
+
+@dataclass
+class Package:
+    """Represents a Python package dependency."""
+
+    name: str
+    version: Optional[str] = None
+    extras: list[str] = field(default_factory=list)
+    source_file: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Normalize package name to lowercase."""
+        self.name = self.name.lower()
+
+
 @dataclass
 class Vulnerability:
-    """Represents a known vulnerability."""
+    """Represents a security vulnerability."""
 
-    id: str
     package_name: str
-    affected_versions: str
-    fixed_version: str | None = None
-    severity: Severity = Severity.UNKNOWN
-    description: str = ""
-    references: list[str] = field(default_factory=list)
-    source: str = ""
+    package_version: Optional[str]
+    severity: Severity
+    source: Source
+    vulnerability_id: str
+    title: str
+    description: Optional[str] = None
+    fixed_versions: list[str] = field(default_factory=list)
+    advisory_url: Optional[str] = None
+    cve_ids: list[str] = field(default_factory=list)
+
+    def get_fix_suggestion(self) -> str:
+        """Get upgrade recommendation."""
+        if self.fixed_versions:
+            return f"Upgrade to: {' or '.join(self.fixed_versions)}"
+        return "Consider removing the package or finding an alternative"
 
 
 @dataclass
 class AuditResult:
-    """Result of auditing dependencies."""
+    """Result of auditing a single package."""
 
-    package_name: str
-    version: str | None
+    package: Package
     vulnerabilities: list[Vulnerability] = field(default_factory=list)
-    is_ioc_match: bool = False
-    ioc_type: str | None = None
-    source_file: str | None = None
+    is_vulnerable: bool = False
 
     @property
-    def has_vulnerabilities(self) -> bool:
-        return len(self.vulnerabilities) > 0
-
-    @property
-    def has_ioc_match(self) -> bool:
-        return self.is_ioc_match
-
-    @property
-    def is_safe(self) -> bool:
-        return not self.has_vulnerabilities and not self.has_ioc_match
+    def vulnerability_count(self) -> int:
+        """Get total number of vulnerabilities."""
+        return len(self.vulnerabilities)
 
 
 @dataclass
-class AuditReport:
-    """Complete audit report."""
+class ScanResult:
+    """Result of scanning a dependencies file."""
 
-    results: list[AuditResult] = field(default_factory=list)
-    total_scanned: int = 0
-    total_vulnerable: int = 0
-    total_ioc_matches: int = 0
-    scan_time_seconds: float = 0.0
-    metadata: dict[str, Any] = field(default_factory=dict)
+    file_path: str
+    file_type: str
+    packages: list[Package] = field(default_factory=list)
+    audit_results: list[AuditResult] = field(default_factory=list)
+    scan_duration: float = 0.0
+    error_message: Optional[str] = None
 
     @property
-    def has_findings(self) -> bool:
-        return self.total_vulnerable > 0 or self.total_ioc_matches > 0
+    def total_packages(self) -> int:
+        """Get total number of packages scanned."""
+        return len(self.packages)
+
+    @property
+    def vulnerable_packages(self) -> int:
+        """Get number of vulnerable packages found."""
+        return sum(1 for result in self.audit_results if result.is_vulnerable)
+
+    @property
+    def total_vulnerabilities(self) -> int:
+        """Get total number of vulnerabilities found."""
+        return sum(result.vulnerability_count for result in self.audit_results)

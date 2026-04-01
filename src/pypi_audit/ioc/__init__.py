@@ -1,1 +1,1 @@
-"""IOC (Indicators of Compromise) detection."""
+"""IOC detection module."""

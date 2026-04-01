@@ -1,42 +1,10 @@
 """Base parser for dependency files."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Iterator
+from pathlib import Path
+from typing import Optional
 
-
-@dataclass
-class Dependency:
-    """Represents a single dependency package."""
-
-    name: str
-    version: str | None = None
-    extras: list[str] = field(default_factory=list)
-    markers: str | None = None
-    source_file: str | None = None
-
-    def __str__(self) -> str:
-        if self.version:
-            return f"{self.name}=={self.version}"
-        return self.name
-
-
-@dataclass
-class ParseResult:
-    """Result of parsing a dependency file."""
-
-    file_path: str
-    dependencies: list[Dependency] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    raw_content: str = ""
-
-    @property
-    def has_errors(self) -> bool:
-        return len(self.errors) > 0
-
-    @property
-    def is_empty(self) -> bool:
-        return len(self.dependencies) == 0
+from ..models import Package
 
 
 class BaseParser(ABC):
@@ -45,29 +13,57 @@ class BaseParser(ABC):
     @property
     @abstractmethod
     def supported_extensions(self) -> tuple[str, ...]:
-        """Return supported file extensions."""
-        pass
+        """Get supported file extensions."""
+        ...
+
+    @property
+    @abstractmethod
+    def file_type(self) -> str:
+        """Get the type identifier for this parser."""
+        ...
 
     @abstractmethod
-    def parse(self, file_path: str, content: str | None = None) -> ParseResult:
+    def parse(self, file_path: str | Path) -> list[Package]:
         """
-        Parse a dependency file.
+        Parse a dependency file and extract packages.
 
         Args:
-            file_path: Path to the dependency file
-            content: Optional file content (if None, read from file_path)
+            file_path: Path to the dependency file.
 
         Returns:
-            ParseResult containing extracted dependencies
+            List of Package objects.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            ValueError: If the file format is invalid.
         """
-        pass
+        ...
 
-    def _read_file(self, file_path: str) -> str:
-        """Read file content from disk."""
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
+    @abstractmethod
+    def parse_content(self, content: str) -> list[Package]:
+        """
+        Parse dependency content from a string.
 
-    def parse_iter(self, file_path: str, content: str | None = None) -> Iterator[Dependency]:
-        """Iterate over dependencies one by one."""
-        result = self.parse(file_path, content)
-        yield from result.dependencies
+        Args:
+            content: Raw content of the dependency file.
+
+        Returns:
+            List of Package objects.
+
+        Raises:
+            ValueError: If the content format is invalid.
+        """
+        ...
+
+    def can_parse(self, file_path: str | Path) -> bool:
+        """
+        Check if this parser can handle the given file.
+
+        Args:
+            file_path: Path to check.
+
+        Returns:
+            True if the file extension is supported.
+        """
+        path = Path(file_path)
+        return path.suffix in self.supported_extensions

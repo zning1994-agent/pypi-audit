@@ -1,1 +1,1 @@
-"""Reports package."""
+"""Reports module."""

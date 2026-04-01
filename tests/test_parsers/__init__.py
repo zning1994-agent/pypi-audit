@@ -1,1 +1,1 @@
-"""Test parsers package."""
+"""Test module initialization."""
